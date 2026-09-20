@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="AdaptaPE.png" alt="Logo de Adapta PE" width="250">
+</p>
+
 # Adapta-PE OS ♿️💻
 
 Adapta-PE OS es una aplicación de accesibilidad avanzada para macOS construida con Swift y SwiftUI. Está diseñada para facilitar la interacción con la computadora a personas con discapacidades motoras o movilidad reducida, ofreciendo un control total del sistema a través de movimientos corporales (Mouse Cinético) y comandos de voz (Asistente Local impulsado por Inteligencia Artificial).
