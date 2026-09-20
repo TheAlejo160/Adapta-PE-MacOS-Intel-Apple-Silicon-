@@ -55,10 +55,13 @@ El proyecto está desarrollado nativamente para macOS usando las siguientes tecn
 - `VoiceManager.swift`: Gestor del micrófono. Configura `SFSpeechRecognizer`, procesa de manera continua el audio (con lógica anti-crash y debounce), extrae la palabra de activación y pasa la orden limpia al `ActionManager`.
 - `ActionManager.swift`: El cerebro de ejecución. Realiza el enrutamiento de comandos (if/else), dispara AppleScripts para el manejo de ventanas, interactúa con la API de NVIDIA para el *Ojo Biónico* y el chat general, y sintetiza las respuestas por voz.
 
-## ⚙️ Configuración y Uso
+## 📥 Instalación (Usuarios de macOS)
 
-1. Al abrir la app, deberás conceder **Permisos de Cámara y Micrófono**, además de permisos de **Accesibilidad** (para que CoreGraphics pueda mover el mouse) y **Automatización** (para AppleScript).
-2. Ingresa tu **API Key de NVIDIA** en la ventana principal para activar las funciones de Inteligencia Artificial Avanzada.
-3. Puedes cambiar el nombre del asistente en la interfaz.
-4. Activa el **Modo Flotante** para mantener el widget discreto en una esquina de la pantalla.
-5. ¡Habla o muévete! (Ej: *"Computadora, ojo biónico"*, *"Computadora, abre Youtube en el segundo monitor"*).
+Dado que esta es una herramienta independiente desarrollada para la comunidad, macOS bloqueará la aplicación por defecto con su sistema de seguridad (Gatekeeper). Para instalarla correctamente, sigue estos pasos:
+
+1. Descarga el archivo `.dmg` desde la sección de **Releases** y ábrelo.
+2. Arrastra la aplicación **Adapta PE** a tu carpeta de **Aplicaciones**.
+3. Abre la aplicación **Terminal** en tu Mac (búscala presionando `Cmd + Espacio`).
+4. Copia y pega el siguiente comando exacto y presiona **Enter** (esto elimina la restricción de cuarentena de macOS):
+   ```bash
+   xattr -cr /Applications/Adapta\ PE.app
