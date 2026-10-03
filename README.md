@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Adapta-PE/Assets.xcassets/AppIcon.appiconset/AdaptaPE.png" alt="Logo de Adapta PE" width="250">
+  <img src="AdaptaPE.png" alt="Logo de Adapta PE" width="250">
 </p>
 
 # Adapta PE para macOS
