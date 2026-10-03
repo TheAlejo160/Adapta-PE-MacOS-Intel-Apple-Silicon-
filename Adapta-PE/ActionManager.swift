@@ -2,378 +2,328 @@ import Foundation
 import AppKit
 import CoreGraphics
 import AVFoundation
+import Combine
 
-class ActionManager {
+final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     static let shared = ActionManager()
+    @Published private(set) var lastResponse = "Listo para ayudarte"
+    @Published private(set) var choices: [String] = []
+    @Published private(set) var choiceContext = ""
+    private var prompt: ChoicePrompt?
+    private var choiceHandler: ((Int) -> Void)?
+    private var choiceTimeout: DispatchWorkItem?
+    private var choicePID: pid_t?
+    var hasChoices: Bool { prompt.map { ProcessInfo.processInfo.systemUptime < $0.expiresAt } ?? false }
+    var showFeedback: (() -> Void)?
     let synthesizer = AVSpeechSynthesizer()
-    
-    func hablar(_ texto: String) {
-        DispatchQueue.main.async {
-            print("🤖 Asistente: \(texto)")
-            let utterance = AVSpeechUtterance(string: texto)
-            utterance.voice = AVSpeechSynthesisVoice(language: "es-PE") ?? AVSpeechSynthesisVoice(language: "es-MX")
-            utterance.rate = 0.5
-            self.synthesizer.speak(utterance)
+    var kineticAction: ((String) -> Void)?
+    var speechOutput: ((Bool) -> Void)?
+    var appAction: ((String) -> Void)?
+    private let scriptQueue = DispatchQueue(label: "pe.adapta.scripts", qos: .userInitiated)
+    private var lastExternalApp: NSRunningApplication?
+    private var appObserver: NSObjectProtocol?
+    private let actionLock = NSLock()
+    private var generation = 0
+    private var activeProcess: Process?
+    private var speechWatchdog: DispatchWorkItem?
+    private var currentUtterance: AVSpeechUtterance?
+    private var actionGeneration: Int { actionLock.withLock { generation } }
+    func cancelPendingActions() {
+        cancelChoices()
+        let process = actionLock.withLock { generation += 1; let old = activeProcess; activeProcess = nil; return old }
+        if let process, process.isRunning { process.terminate() }
+    }
+    func cancelChoices() { choiceTimeout?.cancel(); choiceTimeout = nil; prompt = nil; choiceHandler = nil; choices = []; choicePID = nil; choiceContext = "" }
+    func presentChoices(_ labels: [String], completion: @escaping (Int) -> Void) {
+        cancelChoices()
+        choices = labels; prompt = ChoicePrompt(labels: labels, expiresAt: ProcessInfo.processInfo.systemUptime + 45); choiceHandler = completion
+        choicePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        choiceContext = NSWorkspace.shared.frontmostApplication?.localizedName ?? "la aplicación activa"
+        showFeedback?()
+        hablar(labels.enumerated().map { "\($0.offset + 1): \(String(($0.element.components(separatedBy: " > ").last ?? $0.element).prefix(50)))" }.joined(separator: ". ") + ". Di el número, siguiente o cancelar.")
+        let work = DispatchWorkItem { [weak self] in guard let self, self.prompt != nil else { return }; self.cancelChoices(); self.lastResponse = "Elección cancelada por tiempo de espera" }
+        choiceTimeout = work; DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: work)
+    }
+    func choose(_ answer: String) {
+        guard let prompt, hasChoices else { cancelChoices(); hablar("No hay una elección pendiente"); return }
+        if CommandParser.normalize(answer) == "siguiente" { let handler = choiceHandler; cancelChoices(); handler?(-1); return }
+        guard let index = prompt.index(answer, at: ProcessInfo.processInfo.systemUptime) else { hablar("Di un número del 1 al \(choices.count), siguiente o cancelar."); return }
+        let handler = choiceHandler; cancelChoices(); callar(); handler?(index)
+    }
+
+    private override init() {
+        super.init(); synthesizer.delegate = self
+        lastExternalApp = NSWorkspace.shared.frontmostApplication
+        appObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
+            if let self, let pid = self.choicePID, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, app.processIdentifier != pid { self.cancelChoices(); self.callar(); self.lastResponse = "Elección cancelada al cambiar de aplicación" }
+            if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier { self?.lastExternalApp = app }
         }
     }
-    
-    func procesarIntencion(_ texto: String) {
-        let cmd = texto.components(separatedBy: .punctuationCharacters).joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "  ", with: " ")
-        
-        print("🧠 Procesando intención final: \(cmd)")
-        
-        // ----------------------------------------------------
-        // 1. WEBS GLOBALES MÁS INTELIGENTES (Apertura Directa)
-        // ----------------------------------------------------
-        if (cmd.contains("mercadolibre") || cmd.contains("mercado libre")) && (cmd.contains("abre") || cmd.contains("ingresa") || cmd.contains("página")) {
-            NSWorkspace.shared.open(URL(string: "https://www.mercadolibre.com.pe")!)
-            hablar("Abriendo Mercado Libre")
-            return
+    func hablar(_ text: String) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.hablar(text) }; return }
+        lastResponse = text
+        speechWatchdog?.cancel()
+        currentUtterance = nil
+        synthesizer.stopSpeaking(at: .immediate)
+        speechOutput?(true)
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "es-PE") ?? AVSpeechSynthesisVoice(language: "es-ES")
+        utterance.rate = 0.5; currentUtterance = utterance; synthesizer.speak(utterance)
+        watchSpeech(utterance)
+    }
+    private func watchSpeech(_ utterance: AVSpeechUtterance) {
+        speechWatchdog?.cancel()
+        // Renovado por progreso real: una lectura larga no bloquea la recuperación.
+        let work = DispatchWorkItem { [weak self, weak utterance] in
+            guard let self, let utterance, self.currentUtterance === utterance else { return }
+            self.callar()
         }
-        else if cmd.contains("youtube") && (cmd.contains("abre") || cmd.contains("ingresa") || cmd.contains("página")) {
-            NSWorkspace.shared.open(URL(string: "https://www.youtube.com")!)
-            hablar("Abriendo YouTube")
-            return
+        speechWatchdog = work; DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { if self.currentUtterance === utterance { self.watchSpeech(utterance) } }
+    }
+    func callar() {
+        speechWatchdog?.cancel(); speechWatchdog = nil; currentUtterance = nil
+        synthesizer.stopSpeaking(at: .immediate); speechOutput?(false)
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) { outputFinished(utterance) }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) { outputFinished(utterance) }
+    private func outputFinished(_ utterance: AVSpeechUtterance) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard self.currentUtterance === utterance else { return }
+            self.speechWatchdog?.cancel(); self.speechWatchdog = nil; self.currentUtterance = nil
+            self.speechOutput?(false)
         }
-        else if cmd.contains("canvas") && (cmd.contains("abre") || cmd.contains("ingresa") || cmd.contains("página")) {
-            NSWorkspace.shared.open(URL(string: "https://canvas.usil.edu.pe")!)
-            hablar("Abriendo Canvas")
-            return
+    }
+    func procesarIntencion(_ text: String) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.procesarIntencion(text) }; return }
+        let normalized = CommandParser.normalize(text)
+        if let corner = CommandParser.tail("^(?:(?:mueve|coloca|pon) (?:el )?(?:panel|pip) (?:a|en) (?:la )?esquina|panel (?:en (?:la )?)?esquina)\\s+", in: text), PanelCorner.allCases.contains(where: { CommandParser.normalize($0.title) == CommandParser.normalize(corner) }) {
+            appAction?("esquina:" + CommandParser.normalize(corner)); return
         }
-        else if cmd.contains("google") && (cmd.contains("abre") || cmd.contains("ingresa") || cmd.contains("página")) && !cmd.contains("busca") {
-            NSWorkspace.shared.open(URL(string: "https://www.google.com")!)
-            hablar("Abriendo Google")
-            return
+        if ["mostrar ajustes", "abrir adapta", "mostrar adapta", "modo flotante", "ocultar adapta", "detener todo", "activar talkback", "desactivar talkback"].contains(normalized) { appAction?(normalized); return }
+        if let filter = CommandParser.tail("^(?:filtro|activar filtro)\\s+", in: text) { appAction?("filtro:" + CommandParser.normalize(filter)); return }
+        if ["quitar filtro", "desactivar filtro"].contains(normalized) { appAction?("filtro:ninguno"); return }
+        if let question = CommandParser.tail("^(?:pregunta a la ia|consulta a la ia)\\s+", in: text) { OptionalAI.shared.ask(question); return }
+        if normalized == "analiza pantalla con ia" { OptionalAI.shared.analyzeScreen(); return }
+        let command = CommandParser.parse(text)
+        if hasChoices {
+            if case .choose(let answer) = command { choose(answer); return }
+            if case .unknown = command { choose(text); return }
+            if case .silence = command { callar(); return }
+            cancelChoices()
         }
-        
-        // ----------------------------------------------------
-        // 2. NUEVAS PESTAÑAS Y APPS DEL SISTEMA
-        // ----------------------------------------------------
-        else if cmd.contains("nueva pestaña") || cmd.contains("abre una pestaña") {
-            var navegador = "safari"
-            if cmd.contains("chrome") { navegador = "google chrome" }
-            nuevaPestana(navegador: navegador)
+        if command != .silence {
+            if case .choose = command {} else { cancelPendingActions(); DesktopAccess.shared.cancelPendingWork() }
         }
-        else if cmd.starts(with: "abre ") || cmd.starts(with: "abrir ") || cmd.starts(with: "ejecuta ") {
-            let objetivo = extraerObjetivo(de: cmd, despuesDe: ["abre ", "abrir ", "ejecuta ", "inicia ", "la aplicación ", "una ventana de "])
-            
-            if cmd.contains("monitor") || cmd.contains("pantalla") || cmd.contains("escritorio") {
-                var monitorIndex = 0
-                if cmd.contains("2do") || cmd.contains("segundo") || cmd.contains("dos") { monitorIndex = 1 }
-                else if cmd.contains("3er") || cmd.contains("tercer") || cmd.contains("tres") { monitorIndex = 2 }
-                
-                let appPura = extraerAppMultimonitor(objetivo)
-                if !appPura.isEmpty {
-                    abrirApp(nombre: appPura)
-                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.5) {
-                        self.moverVentanaAMonitor(appName: appPura, monitorIndex: monitorIndex)
-                    }
+        switch command {
+        case .choose(let answer): choose(answer)
+        case .appShortcut(let name, let action): openApp(name, monitor: nil, afterOpen: action)
+        case .keyChord(let text):
+            guard let chord = KeyChord.parse(text) else { hablar("Indica modificadores y una tecla, por ejemplo comando shift N"); return }
+            withTarget { if DesktopAccess.shared.requirePermission() { DesktopAccess.key(chord.code, flags: chord.flags); self.lastResponse = "Atajo enviado: \(text)" } }
+        case .open(let target, let destination): openTarget(target, destination: destination)
+        case .search(let query, let site, let destination):
+            guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { hablar("Dime qué quieres buscar"); return }
+            if let site, let url = VoiceSite.match(site)?.url(query: query) { openURL(url, destination: destination) }
+            else if destination == "actual", let browser {
+                currentBrowserURL(browser) { url in
+                    let current = url.flatMap { currentURL in VoiceSite.catalog.first { site in
+                        guard let host = URL(string: site.home)?.host, let currentHost = currentURL.host else { return false }
+                        let domain = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+                        return currentHost == domain || currentHost.hasSuffix("." + domain)
+                    } }
+                    if let url = (current ?? VoiceSite.match("google"))?.url(query: query) { self.openURL(url, destination: destination) }
                 }
+            } else if let url = VoiceSite.match("google")?.url(query: query) { openURL(url, destination: destination) }
+        case .closeApp(let name): closeApp(name)
+        case .kinetic(let action):
+            if ["izquierdo", "derecho"].contains(action) {
+                withTarget { if action == "izquierdo", DesktopAccess.shared.requirePermission() { DesktopAccess.click() }
+                    else if DesktopAccess.shared.requirePermission() { DesktopAccess.click(right: true) } }
             } else {
-                if !objetivo.isEmpty { abrirApp(nombre: objetivo) }
+                kineticAction?(action)
             }
-        }
-        else if cmd.starts(with: "cierra ") || cmd.starts(with: "cerrar ") {
-            let objetivo = extraerObjetivo(de: cmd, despuesDe: ["cierra ", "cerrar ", "termina ", "la aplicación "])
-            if !objetivo.isEmpty { cerrarApp(nombre: objetivo) }
-        }
-        
-        // ----------------------------------------------------
-        // 3. BÚSQUEDA WEB INTELIGENTE (Filtrado exacto)
-        // ----------------------------------------------------
-        else if cmd.starts(with: "busca ") || cmd.starts(with: "buscar ") {
-            let objetivo = extraerObjetivo(de: cmd, despuesDe: ["busca ", "buscar "])
-            var sitio = "google"
-            var queryLimpia = objetivo
-            
-            if objetivo.hasSuffix(" en youtube") {
-                sitio = "youtube"
-                queryLimpia = objetivo.replacingOccurrences(of: " en youtube", with: "").trimmingCharacters(in: .whitespaces)
-            } else if objetivo.hasSuffix(" en mercado libre") || objetivo.hasSuffix(" en mercadolibre") {
-                sitio = "mercadolibre"
-                queryLimpia = objetivo.replacingOccurrences(of: " en mercado libre", with: "").replacingOccurrences(of: " en mercadolibre", with: "").trimmingCharacters(in: .whitespaces)
-            } else if objetivo.hasSuffix(" en google") {
-                sitio = "google"
-                queryLimpia = objetivo.replacingOccurrences(of: " en google", with: "").trimmingCharacters(in: .whitespaces)
-            }
-            
-            buscarWeb(query: queryLimpia, sitio: sitio)
-        }
-        
-        // ----------------------------------------------------
-        // 4. RATÓN Y ATAJOS
-        // ----------------------------------------------------
-        else if cmd.contains("anticlick") || cmd.contains("click derecho") { ejecutarClick(derecho: true) }
-        else if cmd.contains("click") || cmd.contains("clic") || cmd.contains("selecciona") { ejecutarClick(derecho: false) }
-        else if cmd.contains("baja") || cmd.contains("bajar") || cmd.contains("hacia abajo") { ejecutarAtajo("bajar") }
-        else if cmd.contains("sube") || cmd.contains("subir") || cmd.contains("hacia arriba") { ejecutarAtajo("subir") }
-        else if cmd.contains("presiona ") || cmd.contains("toca ") || cmd.contains("dale ") {
-            if cmd.contains("enter") || cmd.contains("entrar") { ejecutarAtajo("enter") }
-            else if cmd.contains("copiar") || cmd.contains("copia") { ejecutarAtajo("copiar") }
-            else if cmd.contains("pegar") || cmd.contains("pega") { ejecutarAtajo("pegar") }
-        }
-        else if cmd == "copia" || cmd == "copiar" || cmd == "copia esto" { ejecutarAtajo("copiar") }
-        else if cmd == "pega" || cmd == "pegar" || cmd == "pega esto" { ejecutarAtajo("pegar") }
-        else if cmd.contains("ojo biónico") || cmd.contains("lee la pantalla") {
-            leerPantalla()
-        }
-        
-        // ----------------------------------------------------
-        // 5. FALLBACK A IA (Charla Normal)
-        // ----------------------------------------------------
-        else {
-            consultarIA(pregunta: cmd)
+        case .shortcut(let action): withTarget { self.shortcut(action) }
+        case .dictate, .clearText, .select, .focus, .press, .pressSelection, .readScreen, .readElement, .listFields, .writeField, .selectText, .menu, .listActions: withTarget { DesktopAccess.shared.run(command) }
+        case .cancel: cancelPendingActions(); DesktopAccess.shared.cancelSelection(); kineticAction?("cancelar")
+            OptionalAI.shared.cancel()
+            callar(); lastResponse = "Comando cancelado"
+        case .silence: callar()
+        case .unknown(let name): withTarget { DesktopAccess.shared.run(.menu(name)) }
         }
     }
-    
-    // --- INTEGRACIÓN LLM (CHARLA NORMAL) ---
-    private func consultarIA(pregunta: String) {
-        let apiKey = UserDefaults.standard.string(forKey: "NvidiaAPIKey") ?? ""
-        if apiKey.isEmpty {
-            hablar("Perdón, no entendí tu comando. Por favor coloca tu API Key en la interfaz.")
-            return
+    private func withTarget(_ action: @escaping () -> Void) {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier else { action(); return }
+        guard let app = lastExternalApp, !app.isTerminated, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { hablar("Activa primero la aplicación que quieres controlar"); return }
+        app.activate(options: [])
+        let token = actionGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard self.actionGeneration == token, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }; action()
         }
-        
-        let url = URL(string: "https://integrate.api.nvidia.com/v1/chat/completions")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let payload: [String: Any] = [
-            // UTILIZAMOS EL MODELO QUE SÍ TIENE ACCESO TU API KEY (El mismo del ojo biónico)
-            "model": "meta/llama-3.2-11b-vision-instruct",
-            "messages": [
-                ["role": "system", "content": "Eres el asistente del escritorio de la computadora Adapta PE. Responde de forma muy breve, natural, y útil. Cero asteriscos ni formatos markdown."],
-                ["role": "user", "content": pregunta]
-            ],
-            "max_tokens": 150,
-            "temperature": 0.5
-        ]
-        
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            guard let data = data, error == nil else {
-                self.hablar("Error de red al conectar con el cerebro de Inteligencia Artificial.")
+    }
+    private func currentBrowserURL(_ browser: String, completion: @escaping (URL?) -> Void) {
+        let target = browser == "Safari" ? "URL of current tab of front window" : "URL of active tab of front window"
+        runScript("tell application \(Self.quoted(browser)) to get \(target)", reportFailure: false) { output in
+            completion(output.flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) })
+        }
+    }
+    private var browser: String? {
+        let app = NSWorkspace.shared.frontmostApplication
+        let target = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? lastExternalApp : app
+        switch target?.bundleIdentifier {
+        case "com.apple.Safari": return "Safari"
+        case "com.google.Chrome": return "Google Chrome"
+        case "com.brave.Browser": return "Brave Browser"
+        case "com.microsoft.edgemac": return "Microsoft Edge"
+        default: return nil
+        }
+    }
+    private static func quoted(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ") + "\""
+    }
+    private func runScript(_ script: String, reportFailure: Bool = true, completion: ((String?) -> Void)? = nil) {
+        let token = actionGeneration
+        scriptQueue.async {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript"); process.arguments = ["-e", script]
+            process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+            do {
+                let launched = try self.actionLock.withLock {
+                    guard self.generation == token else { return false }
+                    try process.run(); self.activeProcess = process; return true
+                }
+                guard launched else { return }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+                self.actionLock.withLock { if self.activeProcess === process { self.activeProcess = nil } }
+                DispatchQueue.main.async {
+                    guard self.actionGeneration == token else { return }
+                    if reportFailure, process.terminationStatus != 0 { self.hablar("El navegador rechazó la acción. Revisa el permiso de Automatización.") }
+                    completion?(process.terminationStatus == 0 ? String(data: data, encoding: .utf8) : nil)
+                }
+            } catch { DispatchQueue.main.async { guard self.actionGeneration == token else { return }; if reportFailure { self.hablar("No se pudo ejecutar la acción del navegador") }; completion?(nil) } }
+        }
+    }
+    private func openURL(_ url: URL, destination: String) {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { hablar("Sólo se permiten direcciones HTTP o HTTPS"); return }
+        guard let browser else { NSWorkspace.shared.open(url); return }
+        let quoted = Self.quoted(url.absoluteString)
+        let source: String
+        if browser == "Safari" {
+            switch destination {
+            case "ventana": source = "make new document with properties {URL:\(quoted)}"
+            case "pestana": source = "if (count windows) = 0 then\nmake new document with properties {URL:\(quoted)}\nelse\ntell front window to set current tab to (make new tab with properties {URL:\(quoted)})\nend if"
+            default: source = "if (count documents) = 0 then\nmake new document with properties {URL:\(quoted)}\nelse\nset URL of current tab of front window to \(quoted)\nend if"
+            }
+        } else {
+            switch destination {
+            case "ventana": source = "make new window\nset URL of active tab of front window to \(quoted)"
+            case "pestana": source = "if (count windows) = 0 then\nmake new window\nend if\ntell front window\nmake new tab with properties {URL:\(quoted)}\nset active tab index to count tabs\nend tell"
+            default: source = "if (count windows) = 0 then\nmake new window\nend if\nset URL of active tab of front window to \(quoted)"
+            }
+        }
+        runScript("tell application \(Self.quoted(browser))\n\(source)\nactivate\nend tell")
+    }
+    private func openTarget(_ target: String, destination: String) {
+        let (name, monitor) = CommandParser.monitorTarget(target)
+        if monitor == nil, let site = VoiceSite.match(name), let url = site.url() { openURL(url, destination: destination); return }
+        if monitor == nil, name.range(of: "^https?://", options: [.regularExpression, .caseInsensitive]) != nil, let url = URL(string: name) { openURL(url, destination: destination); return }
+        let fallback = monitor == nil && name.range(of: "^(?:[a-z0-9-]+\\.)+[a-z]{2,}(?:[/:?#][^\\s]*)?$", options: [.regularExpression, .caseInsensitive]) != nil ? URL(string: "https://" + name) : nil
+        // Nombres reales como zoom.us tienen prioridad sobre la interpretación como dominio.
+        openApp(name, monitor: monitor, fallbackURL: fallback, destination: destination)
+    }
+    private func openApp(_ name: String, monitor: Int?, fallbackURL: URL? = nil, destination: String = "actual", afterOpen: String? = nil) {
+        let token = actionGeneration
+        ApplicationCatalog.shared.resolve(name) { url in
+            guard self.actionGeneration == token else { return }
+            guard let url else {
+                if let fallbackURL { self.openURL(fallbackURL, destination: destination) }
+                else { self.hablar("No encontré una aplicación única llamada \(name). Di su nombre completo.") }
                 return
             }
-            
-            // DEBUG: Imprime la respuesta real de NVIDIA en consola por si vuelve a fallar
-            if let strData = String(data: data, encoding: .utf8) {
-                print("📦 RESPUESTA NVIDIA NIM: \(strData)")
-            }
-            
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let choices = json["choices"] as? [[String: Any]],
-               let message = choices.first?["message"] as? [String: Any],
-               let text = message["content"] as? String {
-                self.hablar(text)
-            } else {
-                self.hablar("Hubo un problema al procesar la respuesta. Revisa la consola.")
-            }
-        }.resume()
-    }
-    
-    // --- LÓGICAS MULTIMONITOR Y NAVEGADORES ---
-    private func nuevaPestana(navegador: String) {
-        let app = navegador.lowercased().contains("chrome") ? "Google Chrome" : "Safari"
-        let script: String
-        
-        if app == "Google Chrome" {
-            script = """
-            tell application "Google Chrome"
-                if (count every window) = 0 then
-                    make new window
-                else
-                    tell front window to make new tab at end of tabs
-                end if
-                activate
-            end tell
-            """
-        } else {
-            script = """
-            tell application "Safari"
-                if (count every document) = 0 then
-                    make new document
-                else
-                    tell front window to make new tab at end of tabs
-                end if
-                activate
-            end tell
-            """
-        }
-        ejecutarAppleScript(script)
-        hablar("Nueva pestaña abierta en \(app)")
-    }
-    
-    private func moverVentanaAMonitor(appName: String, monitorIndex: Int) {
-        let screens = NSScreen.screens
-        guard screens.count > monitorIndex else { hablar("No detecto un monitor número \(monitorIndex + 1)"); return }
-        
-        let targetScreen = screens[monitorIndex]
-        let frame = targetScreen.visibleFrame
-        let nombreReal = appName.lowercased().contains("chrome") ? "Google Chrome" : appName.capitalized
-        
-        let script = """
-        tell application "System Events"
-            tell process "\(nombreReal)"
-                set position of window 1 to {\(Int(frame.minX)), \(Int(frame.minY))}
-            end tell
-        end tell
-        """
-        ejecutarAppleScript(script)
-        hablar("Movido al monitor \(monitorIndex + 1)")
-    }
-    
-    private func ejecutarAppleScript(_ source: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            var error: NSDictionary?
-            if let scriptObject = NSAppleScript(source: source) { scriptObject.executeAndReturnError(&error) }
-        }
-    }
-    
-    private func extraerAppMultimonitor(_ frase: String) -> String {
-        var app = frase
-        let basuras = ["en", "mi", "el", "la", "segundo", "tercer", "2do", "3er", "monitor", "pantalla", "escritorio"]
-        for b in basuras { app = app.replacingOccurrences(of: b, with: "") }
-        return app.trimmingCharacters(in: .whitespaces)
-    }
-    
-    private func extraerObjetivo(de frase: String, despuesDe palabrasClave: [String]) -> String {
-        var objetivo = frase
-        for palabra in palabrasClave {
-            if let range = objetivo.range(of: palabra) {
-                objetivo = String(objetivo[range.upperBound...]).trimmingCharacters(in: .whitespaces)
-                break
-            }
-        }
-        let articulos = ["el ", "la ", "los ", "las ", "un ", "una "]
-        for articulo in articulos {
-            if objetivo.hasPrefix(articulo) { objetivo = String(objetivo.dropFirst(articulo.count)) }
-        }
-        return objetivo.trimmingCharacters(in: .whitespaces)
-    }
-    
-    func ejecutarClick(derecho: Bool) {
-        guard let currentEvent = CGEvent(source: nil) else { return }
-        let loc = currentEvent.location
-        let button: CGMouseButton = derecho ? .right : .left
-        let typeDown: CGEventType = derecho ? .rightMouseDown : .leftMouseDown
-        let typeUp: CGEventType = derecho ? .rightMouseUp : .leftMouseUp
-        
-        let md = CGEvent(mouseEventSource: nil, mouseType: typeDown, mouseCursorPosition: loc, mouseButton: button)
-        let mu = CGEvent(mouseEventSource: nil, mouseType: typeUp, mouseCursorPosition: loc, mouseButton: button)
-        md?.post(tap: .cghidEventTap); mu?.post(tap: .cghidEventTap)
-        hablar(derecho ? "Anticlick" : "Click")
-    }
-    
-    func abrirApp(nombre: String) {
-        let nombreReal = nombre.lowercased().contains("chrome") ? "Google Chrome" : nombre
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.launchPath = "/usr/bin/mdfind"
-            task.arguments = ["kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '*\(nombreReal)*'cd"]
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            try? task.run()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                if let rutaApp = output.split(separator: "\n").first {
-                    let url = URL(fileURLWithPath: String(rutaApp))
-                    DispatchQueue.main.async {
-                        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-                            if error == nil { self.hablar("Abriendo \(nombreReal)") }
-                        }
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { app, error in
+                DispatchQueue.main.async {
+                    guard self.actionGeneration == token else { return }
+                    guard let app, error == nil else { self.hablar("No se pudo abrir \(name)"); return }
+                    if let action = afterOpen ?? (destination == "ventana" ? "nueva_ventana" : destination == "pestana" ? "nueva_pestana" : nil) {
+                        app.activate(options: [])
+                        self.appShortcut(action, app: app, token: token, attempt: 0); return
                     }
-                    return
+                    if let monitor { self.placeWindow(app, monitor: monitor, token: token, attempt: 0) }
+                    else { self.hablar("Abriendo \(app.localizedName ?? name)") }
                 }
             }
-            self.hablar("No encontré la aplicación \(nombreReal)")
         }
     }
-    
-    func cerrarApp(nombre: String) {
-        let nombreReal = nombre.lowercased().contains("chrome") ? "Google Chrome" : nombre
-        DispatchQueue.global(qos: .userInitiated).async {
-            let apps = NSWorkspace.shared.runningApplications
-            var cerrada = false
-            for app in apps {
-                if let appName = app.localizedName, appName.lowercased().contains(nombreReal.lowercased()) {
-                    app.terminate()
-                    cerrada = true
-                }
-            }
-            self.hablar(cerrada ? "Cerrando \(nombreReal)" : "No encontré \(nombreReal) ejecutándose")
+    private func appShortcut(_ name: String, app: NSRunningApplication, token: Int, attempt: Int) {
+        guard actionGeneration == token else { return }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+            shortcut(name); return
+        }
+        guard attempt < 6 else { hablar("Activa \(app.localizedName ?? "la aplicación") para ejecutar la acción"); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.appShortcut(name, app: app, token: token, attempt: attempt + 1) }
+    }
+    private func placeWindow(_ app: NSRunningApplication, monitor: Int, token: Int, attempt: Int) {
+        guard actionGeneration == token, DesktopAccess.shared.requirePermission() else { return }
+        DesktopAccess.shared.moveWindow(app: app, monitor: monitor) { success, retry in
+            guard self.actionGeneration == token else { return }
+            if retry, attempt < 5 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.placeWindow(app, monitor: monitor, token: token, attempt: attempt + 1) }
+            } else { self.hablar(success ? "Ventana en el monitor \(monitor + 1)" : "No se pudo mover la ventana al monitor \(monitor + 1)") }
         }
     }
-    
-    func buscarWeb(query: String, sitio: String) {
-        let cleanQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        var urlString = "https://www.google.com/search?q=\(cleanQuery)"
-        if sitio == "youtube" { urlString = "https://www.youtube.com/results?search_query=\(cleanQuery)" }
-        else if sitio == "mercadolibre" { urlString = "https://listado.mercadolibre.com.pe/\(cleanQuery.replacingOccurrences(of: " ", with: "-"))" }
-        
-        if let url = URL(string: urlString) {
-            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
-            hablar("Buscando \(query.isEmpty ? sitio : query)")
+    private func closeApp(_ name: String) {
+        let token = actionGeneration
+        ApplicationCatalog.shared.resolve(name) { url in
+            guard self.actionGeneration == token else { return }
+            let normalized = CommandParser.normalize(name)
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { ($0.bundleURL == url && url != nil) || CommandParser.normalize($0.localizedName ?? "") == normalized }), app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { self.hablar("No encontré esa aplicación abierta"); return }
+            self.hablar(app.terminate() ? "Solicitando cierre de \(name)" : "La aplicación no aceptó cerrar")
         }
     }
-    
-    func ejecutarAtajo(_ accion: String) {
-        let source = CGEventSource(stateID: .hidSystemState)
-        switch accion {
-        case "copiar": simularTeclado(keyCode: 8, flags: .maskCommand, source: source); hablar("Copiado")
-        case "pegar": simularTeclado(keyCode: 9, flags: .maskCommand, source: source); hablar("Pegado")
-        case "enter": simularTeclado(keyCode: 36, flags: [], source: source)
-        case "bajar": let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -15, wheel2: 0, wheel3: 0); scroll?.post(tap: .cghidEventTap)
-        case "subir": let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 15, wheel2: 0, wheel3: 0); scroll?.post(tap: .cghidEventTap)
+    private func shortcut(_ name: String) {
+        guard DesktopAccess.shared.requirePermission() else { return }
+        let menuActions = ["nueva_ventana", "nueva_pestana", "cerrar_ventana", "cerrar_pestana", "guardar", "guardar_como", "imprimir"]
+        if menuActions.contains(name) { DesktopAccess.shared.run(.menu(name)); return }
+        let browserActions = ["atras", "adelante", "recargar", "siguiente_pestana", "anterior_pestana", "zoom_mas", "zoom_menos", "zoom_normal"]
+        if browserActions.contains(name), browser == nil { hablar("Activa Safari, Chrome, Brave o Edge para ese comando"); return }
+        switch name {
+        case "cortar": DesktopAccess.key(7, flags: .maskCommand)
+        case "buscar_texto": DesktopAccess.key(3, flags: .maskCommand)
+        case "minimizar": DesktopAccess.key(46, flags: .maskCommand)
+        case "ocultar_app": DesktopAccess.key(4, flags: .maskCommand)
+        case "pantalla_completa": DesktopAccess.key(3, flags: [.maskControl, .maskCommand])
+        case "mission_control": DesktopAccess.key(126, flags: .maskControl)
+        case "escritorio": DesktopAccess.key(103)
+        case "spotlight": DesktopAccess.key(49, flags: .maskCommand)
+        case "cambiar_app": DesktopAccess.key(48, flags: .maskCommand)
+        case "escape": DesktopAccess.key(53)
+        case "tabulador": DesktopAccess.key(48)
+        case "tabulador_anterior": DesktopAccess.key(48, flags: .maskShift)
+        case "direccion": DesktopAccess.key(37, flags: .maskCommand)
+        case "atras": DesktopAccess.key(123, flags: .maskCommand)
+        case "adelante": DesktopAccess.key(124, flags: .maskCommand)
+        case "recargar": DesktopAccess.key(15, flags: .maskCommand)
+        case "siguiente_pestana": DesktopAccess.key(48, flags: .maskControl)
+        case "anterior_pestana": DesktopAccess.key(48, flags: [.maskControl, .maskShift])
+        case "zoom_mas": DesktopAccess.key(24, flags: .maskCommand)
+        case "zoom_menos": DesktopAccess.key(27, flags: .maskCommand)
+        case "zoom_normal": DesktopAccess.key(29, flags: .maskCommand)
+        case "copiar": DesktopAccess.key(8, flags: .maskCommand)
+        case "pegar": DesktopAccess.key(9, flags: .maskCommand)
+        case "enter": DesktopAccess.key(36)
+        case "deshacer": DesktopAccess.key(6, flags: .maskCommand)
+        case "rehacer": DesktopAccess.key(6, flags: [.maskCommand, .maskShift])
+        case "seleccionar_todo": DesktopAccess.key(0, flags: .maskCommand)
+        case "inicio": DesktopAccess.key(126, flags: .maskCommand)
+        case "final": DesktopAccess.key(125, flags: .maskCommand)
+        case "bajar", "subir": DesktopAccess.post(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: name == "bajar" ? -12 : 12, wheel2: 0, wheel3: 0))
+        case "reproducir", "pausar":
+            // Los reproductores exponen esta acción por AX; evitar una barra espaciadora que pueda escribir en formularios.
+            DesktopAccess.shared.run(.press(name == "pausar" ? "pausa" : "reproducir"))
         default: break
         }
-    }
-    
-    private func simularTeclado(keyCode: CGKeyCode, flags: CGEventFlags, source: CGEventSource?) {
-        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        down?.flags = flags; down?.post(tap: .cghidEventTap)
-        up?.flags = flags; up?.post(tap: .cghidEventTap)
-    }
-
-    // --- INTEGRACIÓN LLM (VISIÓN DE PANTALLA) ---
-    func leerPantalla() {
-        let apiKey = UserDefaults.standard.string(forKey: "NvidiaAPIKey") ?? ""
-        if apiKey.isEmpty { hablar("Falta configurar tu clave de API en la interfaz."); return }
-        hablar("Analizando pantalla...")
-        guard let image = CGDisplayCreateImage(CGMainDisplayID()) else { return }
-        let bitmapRep = NSBitmapImageRep(cgImage: image)
-        guard let imageData = bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) else { return }
-        
-        enviarAlLLM(base64Image: imageData.base64EncodedString(), apiKey: apiKey)
-    }
-    
-    private func enviarAlLLM(base64Image: String, apiKey: String) {
-        let url = URL(string: "https://integrate.api.nvidia.com/v1/chat/completions")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let payload: [String: Any] = [
-            "model": "meta/llama-3.2-11b-vision-instruct",
-            "messages": [["role": "user", "content": "Describe brevemente qué hay en la pantalla y qué puedo seleccionar. <img src=\"data:image/jpeg;base64,\(base64Image)\" />"]],
-            "max_tokens": 250, "temperature": 0.3
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            guard let data = data, error == nil else { self.hablar("Error de conexión."); return }
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let choices = json["choices"] as? [[String: Any]],
-               let message = choices.first?["message"] as? [String: Any],
-               let text = message["content"] as? String {
-                self.hablar(text)
-            } else { self.hablar("Error al interpretar la imagen.") }
-        }.resume()
+        lastResponse = "Acción enviada: " + name.replacingOccurrences(of: "_", with: " ")
     }
 }
