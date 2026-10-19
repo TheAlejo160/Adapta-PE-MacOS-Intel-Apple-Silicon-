@@ -2,97 +2,57 @@
   <img src="AdaptaPE.png" alt="Logo de Adapta PE" width="250">
 </p>
 
-# Adapta PE para macOS
+# Adapta PE Base para macOS
 
-## Comandos naturales: bloque del 17 de octubre de 2026
+Adapta PE Base es una aplicación nativa de escritorio en SwiftUI para usar el Mac con voz, lectura de controles y cursor por cámara. Está pensada para quien necesita adaptar el manejo del escritorio a su movilidad: permite ajustar postura, velocidad, temblor y espera de clic. Puedes activar sólo las funciones que necesites.
 
-La palabra predeterminada admite «Computadora», «Computadoras» y «Computador». Una llamada seguida sólo de cortesía mantiene la espera de ocho segundos. Las palabras personales siguen siendo independientes: elegir «Asistente» no activa esos alias. Se conserva el texto original tras la llamada, incluidos espacios interiores y Unicode; las pruebas de texto no acreditan reconocimiento con micrófono.
+Esta es la **edición completa de escritorio para macOS**, independiente de las extensiones. Incluye tres modos de cámara, TalkBack, siete filtros de pantalla, mascotas opcionales y panel flotante. Los comandos y el control corporal funcionan sin una API key. La IA externa es voluntaria; no incluye un modelo generativo local ni una suscripción.
 
-El parser acepta cortesía y variantes españolas como «por favor abre Safari», «quiero que abras Safari», «ábrame Safari» y «abrí Safari». Conserva mayúsculas, acentos y espacios interiores del dictado. La selección literal y las consultas a la API conservan su puntuación. Se mantienen los atajos nativos existentes.
+Requiere **macOS Sonoma 14.0 o posterior**. El proyecto está destinado a **Intel (`x86_64`) y Apple Silicon (`arm64`)**: no fija `ARCHS` ni excluye arquitecturas; usa las arquitecturas estándar de Xcode. Debug tiene `ONLY_ACTIVE_ARCH = YES`, por lo que una compilación de desarrollo no demuestra que el resultado sea universal. Tampoco acredita funcionamiento en todos los Mac compatibles.
 
-Las partículas finales ambiguas «pe», «pues», «ya pe» y «ya pues» sólo se retiran si llevan una coma antes. Así «busca Adapta PE» y «busca qué significa pues» conservan su contenido. «Abre Safari, pe» se prepara como «abre Safari». Es una diferencia conservadora respecto a la extensión de referencia; no se adivina si una palabra final pertenece a un nombre o consulta.
+Si sólo necesitas voz, filtros, mascotas y lectura manual, consulta [Adapta PE Lite para macOS](https://github.com/TheAlejo160/Adapta-PE-Lite-MacOS), que tiene su propio proyecto y no incorpora cámara ni TalkBack automático.
 
-Este bloque porta reglas de texto españolas. No añade reconocimiento acústico en seis idiomas ni acredita precisión con micrófonos reales.
+## Instalar en tu Mac
 
-También se descartan orientaciones no finitas y se acotan ángulos extremos antes de integrar el gesto. Esto evita bloqueos del cálculo; no cambia umbrales, modelos ni calibración. Las pruebas usan puntos sintéticos, sin cámara.
+### Desde un DMG
 
-Aplicación de escritorio independiente en Swift/SwiftUI, basada en las funciones de la extensión Adapta PE completa. Mínimo configurado: macOS Sonoma 14.0. Sin dependencias externas ni IA generativa por defecto. La edición Lite se desarrolla en un proyecto y repositorio independientes: asistente de voz completo, siete filtros y segundo plano.
+En el entorno de este proyecto existe un archivo histórico llamado `Instalador_Adapta_PE.dmg`. No forma parte del flujo reproducible de compilación ni se acredita aquí que contenga las fuentes actuales. Consulta las [descargas del sitio oficial](https://www.adaptape.cc) para comprobar qué paquete se ofrece; clonar el repositorio no garantiza descargar un instalador.
 
-## Mascotas y mejoras compartidas · 11 de octubre de 2026
+Si recibes un DMG de una fuente que reconoces:
 
-Se contrastaron las extensiones completas 13.0 y Lite 3.0, sus README y los motores actuales. Las mejoras se adaptan a las APIs del escritorio; cada edición conserva sus funciones.
+1. Ábrelo y copia la aplicación a **Aplicaciones**.
+2. Abre la copia de Aplicaciones, en lugar de ejecutarla dentro de la imagen.
+3. Si macOS bloquea la apertura por desarrollador no identificado o falta de notarización, intenta abrirla una vez y entra en **Ajustes del Sistema → Privacidad y seguridad → Abrir de todos modos** (también puede aparecer como **Abrir igualmente**). Confirma únicamente si confías en ese archivo.
+4. Concede después los permisos de las funciones que vayas a usar.
 
-En **Mascota**, elige **Tinku** (gallito), **Cuchu** (cuy), **Yati** (llama) o **Sin mascota**, que es el valor inicial. Sólo se decodifica el atlas elegido. Los cuadros nativos de 96×112 conservan transparencia, secuencias de entrada/salida y duración de los sprites originales. Un temporizador sigue la duración de los cuadros; otro se programa una sola vez para el descanso. No se repinta toda la interfaz. La animación se detiene al dormir, con movimiento reducido y durante suspensión. Ocultar/cambiar libera el atlas anterior.
+Ese permiso de apertura es distinto de Accesibilidad. No hace falta desactivar Gatekeeper. Si el aviso indica malware, archivo dañado o una restricción de tu organización, verifica la descarga o consulta al administrador; no lo trates como el mismo bloqueo. Este README no certifica firma, notarización ni integridad del DMG histórico.
 
-La mascota mira hacia el cursor cercano, acompaña la llamada al asistente y cambia entre hablar y leer durante la salida de voz real. **Saludar**, **Dormir** y **Despertar** permiten controlar su estado; dormir se mantiene hasta despertar. El dibujo deja pasar los clics. Arrastra su nombre entre pantallas o pulsa **Mover con teclas**, usa las flechas y vuelve con **Escape**. **Otro monitor** cambia la pantalla sin arrastrar; se recuerdan mascota, monitor y posición relativa.
+### Desde este repositorio con Xcode
 
-### Interfaz, panel y compañía
-
-Las funciones principales quedan en secciones con nombres directos. **Usar panel** abre PiP; **Opciones** permite elegir mascota, filtros, esquina y monitor. Los dispositivos y preferencias de reconocimiento permanecen bajo sus opciones avanzadas. Base conserva calibración, control corporal, selección de cámara y API externa voluntaria. La cámara de ajustes aparece sólo en Control; en PiP puedes ocultar su vista sin apagar el cursor. **Detener todo** permanece accesible.
-
-Activa **Mover mascota y panel juntos** para situar la mascota arriba de PiP. Arrastra el título del panel o el nombre de la mascota para mover ambos. Al separarlos, la mascota recupera su posición propia. Se recuerdan unión, monitor y posición relativa del panel; cambiar de esquina vuelve al anclaje. El tamaño se limita al área útil reservando lugar para la mascota. En macOS también puedes enfocar el título y usar las flechas. PiP conserva fondo sólido para leer incluso cuando está inactivo. El control Ajustes usa Liquid Glass desde macOS 26; versiones anteriores y transparencia reducida usan el estilo nativo sencillo.
-
-La llamada por voz usa el teléfono una vez; ejecutar una orden usa la laptop una vez. Leer y hablar acompañan únicamente la salida de voz real. Después vuelve a reposo, sin dejar teléfono/laptop trabajando indefinidamente. Tras **90 segundos sin interacción**, descansa y detiene su animación. La próxima acción despierta el descanso automático; **Dormir** manual exige **Despertar**. No duerme automáticamente durante una lectura o respuesta hablada.
-
-Di **«computadora, une mascota al panel»**, **«separa mascota del panel»** o **«panel esquina superior izquierda»**. También se admite **«mueve el panel a la esquina inferior derecha»**. Cambiar posición usa los mismos límites que el arrastre y conserva el control disponible.
-
-Después de llamar al asistente, admite **«mascota Cu Chu»**, **«mascota Tinku»**, **«mascota Yaty»**, **«elige mascota tiiinku»**, **«oculta mascota»**, **«saluda mascota»**, **«duerme mascota»** y **«despierta mascota»**. Las órdenes se reconocen completas; mencionar una mascota dentro de dictado o búsqueda conserva ese texto.
-
-El cursor ofrece tres modos: **Cabeza / torso**, **Brazos, manos o puños** y **Zona con textura**. Los nombres antiguos se convierten al modo equivalente: torso → cabeza, automático/brazos/lados → manos, zonas laterales → zona libre. Se conservan velocidad, amplitud, temblor y permanencia.
-
-Cabeza aprende reposo mediante al menos cuatro muestras distintas durante 900 ms. Manos y textura tienen centro fijo: la primera posición es el reposo de un joystick; desplaza ligeramente la zona visible y mantenla para continuar, vuelve al inicio para detenerte. La muñeca permite manos cerradas; el respaldo corporal usa muñecas/codos visibles, nunca hombros para ese modo. Se conserva la mano por proximidad; al perderla, sólo una muñeca cercana puede respaldarla. Cabeza admite nariz/giro y respaldo corporal.
-
-Cerca del reposo, uno o dos dedos alineados aportan dirección. Vision ofrece puntos 2D: se usa dirección de dedos o giro relativo de muñeca/nudillo; no se atribuye profundidad 3D a esos datos. Zona libre adquiere un detalle por movimiento local en cualquier parte útil de la imagen, compensa cambios uniformes de luz y compara parches normalizados con pequeños giros. No identifica anatomía; una textura uniforme/repetida u oclusión puede impedir seguimiento. Después de 1.200 ms de pérdida se necesita otra adquisición.
-
-Pérdidas, pausas, cambios de fuente y huecos de más de 200 ms reinician el gesto y desarman clic. Volver al reposo frena sin esperar al suavizado. El clic sigue exigiendo salida, regreso y permanencia sobre el mismo destino. La atracción suave hacia el centro de controles accesibles cercanos (máximo 28 píxeles) reutiliza la consulta local de accesibilidad; no recorre toda la app ni arma clic. Un movimiento decidido permite salir.
-
-La cámara solicita **640×480 a 30 FPS**. `AVCaptureVideoPreviewLayer` muestra el flujo independientemente de Vision; la inferencia es serial y descarta imágenes atrasadas. La textura usa **160×120**. El HUD publica hasta 10 Hz; esa frecuencia no limita el vídeo de preview.
-
-### Pantalla completa y varios monitores
-
-Los filtros usan una captura/composición local por pantalla. Se reconstruyen al conectar o retirar monitores y al cambiar su disposición. Las capas y mascotas se unen a Spaces y a otras apps en pantalla completa mediante [canJoinAllApplications](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct/canjoinallapplications); el filtro queda debajo de los controles propios de Adapta PE, evita capturarse a sí mismo y deja pasar los clics. **Preparando**, **Activo** y los errores explican el estado real.
-
-La captura requiere el permiso de Grabación de pantalla. Contenido protegido, escritorio seguro o juegos que usen presentación exclusiva pueden impedir captura/capas; usa pantalla completa de escritorio cuando la app lo permita. La lectura requiere controles AX publicados y la entrada puede ser rechazada por cada juego. No se promete acceso a superficies que el sistema protege. La composición por monitor tiene coste de GPU/memoria; 30 FPS es el límite solicitado, no una medición garantizada.
-
-### Código y comprobación
-
-- [`Mascot.swift`](Adapta-PE/Mascot.swift): atlas/secuencias, comandos, ventanas, voz y controles SwiftUI.
-- [`Mascotas/`](Adapta-PE/Mascotas/): sprites y manifiestos locales.
-- [`GestureState.swift`](Adapta-PE/GestureState.swift) y [`ZoneTracker.swift`](Adapta-PE/ZoneTracker.swift): gesto, modos, atracción y textura.
-
-Compilación Debug y 28 pruebas de lógica aprobadas con Xcode 27, sin activar sensores. Se comprobaron selección y controles de mascotas en la interfaz real. Cámara/micrófono, filtros activos, juegos exclusivos, monitor externo y consumo/FPS en equipo real requieren validación física. No se regeneró una distribución firmada/notarizada.
-
-## Funciones
-
-- Cursor cinético con cámara: cabeza/torso, brazos/manos/puños y zona con textura.
-- Calibración de postura, filtro de temblor, movimientos pequeños, velocidad y espera ajustables.
-- Clic por permanencia con armado y un clic por entrada; clic derecho por voz y pausa con ratón físico.
-- Voz con palabra personalizable, dictado Unicode, búsquedas, pestañas, ventanas y atajos.
-- Selección, foco y activación de elementos a través de Accesibilidad de macOS.
-- TalkBack local y lectura de la ventana activa, sin enviar pantallas a una API.
-- Siete matrices de color equivalentes a la extensión, aplicadas localmente a las pantallas.
-- Mascota peruana opcional: Tinku, Cuchu o Yati, con voz, estados y posición entre monitores.
-- Barra de menú, panel flotante, continuidad al cerrar ajustes e inicio de sesión opcional.
-- IA externa opcional con API key personal en Llavero, endpoint HTTPS y modelo configurables.
-
-La equivalencia y límites por módulo se explican en [docs/PARIDAD.md](docs/PARIDAD.md). Vision y Accesibilidad de macOS sustituyen modelos MediaPipe y DOM; no garantizan la misma detección ni semántica en todas las apps.
-
-## Descargar e instalar desde terminal
-
-Código: [TheAlejo160/Adapta-PE-MacOS-Intel-Apple-Silicon-](https://github.com/TheAlejo160/Adapta-PE-MacOS-Intel-Apple-Silicon-). Este repositorio contiene **Adapta PE completo**. No requiere instalar Python, npm ni paquetes Swift externos.
-
-Necesitas Xcode completo, con sus herramientas de línea de comandos seleccionadas, un SDK macOS compatible y macOS 14 o posterior para estas aplicaciones. `xcodebuild -version` permite comprobarlo. Configura el equipo de firma en **Signing & Capabilities**; el equipo incluido pertenece al autor y puede no estar disponible para tu cuenta. La revisión local usa Xcode 27; no se acredita compatibilidad con todo Xcode anterior.
+Necesitas Xcode completo y sus herramientas de línea de comandos seleccionadas. El proyecto registra **Xcode 27.0** y utiliza grupos de archivos sincronizados; usa Xcode 27 como referencia. No se ha establecido aquí la versión anterior más antigua capaz de compilarlo. No requiere Python, Node, npm ni paquetes Swift externos.
 
 ```sh
 git clone https://github.com/TheAlejo160/Adapta-PE-MacOS-Intel-Apple-Silicon-.git Adapta-PE-macOS
 cd Adapta-PE-macOS
 xcodebuild -version
 open Adapta-PE.xcodeproj
-# Tras revisar/configurar la firma en Xcode, compila y abre Base:
+```
+
+En Xcode:
+
+1. Selecciona el esquema **Adapta-PE** y el destino **My Mac**.
+2. En el target **Adapta-PE → Signing & Capabilities**, sustituye el equipo del autor por tu propio equipo si vas a ejecutar una compilación firmada. La firma automática del repositorio no da acceso a su cuenta.
+3. Ejecuta **Product → Run**. Autoriza los permisos para esa copia de la aplicación.
+
+También puedes compilar y abrir la app con el script existente, después de configurar la firma:
+
+```sh
 ./script/build_and_run.sh --verify
 ```
 
-El script detiene la instancia anterior de Base y usa una carpeta temporal de compilación. Para conservar una instalación local, cierra la aplicación desde su barra de menú, compila Release con tu firma configurada y copia el bundle a `~/Applications`:
+El script cierra la instancia anterior de Base, compila Debug en una carpeta temporal y abre `Adapta-PE.app`. `--verify` sólo comprueba que el proceso siga presente después de un segundo; no prueba voz, cámara ni accesibilidad. Sin argumentos compila y abre; `--debug` compila y abre el proyecto en Xcode; `--logs` muestra logs del proceso y `--telemetry` los del subsistema de la app.
+
+Para una comprobación de compilación local sin firma, puedes usar el comando de la sección [Desarrollo y pruebas](#desarrollo-y-pruebas). No genera una distribución notarizada. Para mantener una copia local Release, configura primero tu firma y ejecuta:
 
 ```sh
 xcodebuild -project Adapta-PE.xcodeproj -scheme Adapta-PE \
@@ -102,157 +62,208 @@ ditto build/base/Build/Products/Release/Adapta-PE.app "$HOME/Applications/Adapta
 open "$HOME/Applications/Adapta-PE.app"
 ```
 
+Cierra la copia anterior desde la barra de menú antes de sustituirla. Mantener ubicación y firma estables ayuda a conservar los permisos de macOS. Publicar para otras personas requiere revisar la firma de distribución y la notarización por separado.
 
-Para actualizar: cierra la edición instalada, guarda cambios propios, ejecuta `git pull --ff-only`, vuelve a compilar y copia el nuevo bundle. Los permisos del sistema pueden necesitar revisión si cambia la firma o ubicación. Para desinstalar, desactiva el inicio de sesión desde la app, sal y elimina su bundle; las preferencias y la clave personal del Llavero no se borran mediante este procedimiento.
+## Permisos: concede sólo los que necesites
 
-## Compilar y verificar
+En **Ajustes del Sistema → Privacidad y seguridad**, busca la copia de Adapta PE que ejecutas. El nombre de Grabación de pantalla puede variar entre versiones de macOS.
 
-Abre `Adapta-PE.xcodeproj` en Xcode. Selecciona el esquema **Adapta-PE** y tu equipo de firma para ejecutar/distribuir. El proyecto usa grupos sincronizados de Xcode 16 o posterior; esta revisión se verifica con Xcode 27.
+| Permiso | Cuándo se usa | Dónde revisarlo |
+| --- | --- | --- |
+| Micrófono | Al encender **Voz**. | **Micrófono**. |
+| Reconocimiento de voz | Para convertir el audio en órdenes con Speech de Apple. | **Reconocimiento de voz**. |
+| Accesibilidad | Cursor, clics, teclado, campos, menús y lectura de controles AX. | **Accesibilidad**; la app ofrece **Permitir control del escritorio**. |
+| Cámara | Al encender **Cursor con cámara**. | **Cámara**. No se necesita para voz o lectura manual. |
+| Grabación de pantalla | Filtros y captura explícita para IA. | **Grabación de pantalla**, o **Grabación de pantalla y audio del sistema**. Los filtros no capturan audio. |
+| Automatización | Control de pestañas y ventanas y búsqueda contextual en Safari, Chrome, Brave o Edge mediante Apple Events. | **Automatización → Adapta PE** y el navegador solicitado; aparece tras una petición. |
+
+En **Control → Dispositivos y preferencias → Actualizar dispositivos y permisos** puedes renovar el estado. Hay botones específicos cuando se deniega cámara, micrófono o reconocimiento. Si macOS solicita reiniciar la app tras un cambio, sal desde su barra de menú y vuelve a abrirla.
+
+El proyecto genera su Info.plist con las descripciones `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription` y `NSAppleEventsUsageDescription`. Activa hardened runtime, acceso a cámara/audio y Apple Events; no utiliza App Sandbox. Estas capacidades de firma no sustituyen el consentimiento de macOS.
+
+## Primera sesión: voz y una orden sencilla
+
+1. Abre **Control → Dispositivos y preferencias** y elige **Micrófono**. La selección predeterminada sigue al dispositivo del sistema.
+2. En **Nombre para llamar al asistente**, deja `computadora` o escribe un nombre propio, por ejemplo `Máquina Azul`.
+3. Enciende **Voz** y concede Micrófono y Reconocimiento de voz. Espera el estado que invita a decir el nombre.
+4. Di **«Computadora, por favor abre Safari»**. Si elegiste otro nombre, úsalo en su lugar. La interfaz muestra **Escuché:** y la respuesta.
+5. Puedes decir sólo el nombre y dar la orden en los siguientes **8 segundos**. Fuera de esa espera, vuelve a llamar al asistente.
+
+El nombre predeterminado acepta «Computadora», «Computadoras» y «Computador». Un nombre personal tiene sus propias coincidencias: elegir «Asistente» no mantiene esos alias. Se comparan acentos y espacios equivalentes, conservando el contenido de la orden.
+
+La implementación actual reconoce órdenes en **español**. Busca reconocimiento local disponible en `es-PE`, `es-ES` o `es-MX`. Si no lo encuentra, muestra el motivo. **Permitir reconocimiento de Apple por red** está apagado por defecto: al encenderlo autorizas que Apple pueda procesar audio por red. Esto es independiente de la IA externa. La guía [AdaptaPE.md](AdaptaPE.md) incluye objetivos de otras plataformas y seis idiomas; no todos están implementados en esta app.
+
+### Abrir apps, sitios y navegar
+
+Precede estas órdenes con tu nombre de activación:
+
+- **«Abre Zoom»**, **«ejecutar Visual Studio Code»**, **«abre Safari en el segundo monitor»**. La app debe estar instalada. Los monitores se enumeran en Dispositivos y preferencias.
+- **«Abre YouTube»**, **«busca movilidad en Wikipedia»**, **«abre Google en nueva pestaña»**.
+- **«Nueva pestaña»**, **«abre una nueva ventana de Chrome»**, **«abre Chrome en nueva ventana»**, **«cierra esta pestaña»**, **«atrás»**, **«adelante»**, **«recarga»**.
+- **«Siguiente pestaña»**, **«anterior pestaña»**, **«aumenta zoom»**, **«reduce zoom»**, **«zoom normal»**, **«baja la página»**, **«sube»**, **«inicio»**, **«final»**.
+- **«Guardar»**, **«guardar como»**, **«imprimir»**, **«Spotlight»**, **«Mission Control»**, **«mostrar escritorio»**, **«pantalla completa»**.
+- **«Presiona comando shift N»**, **«atajo control option arriba»**, **«campo siguiente»**, **«campo anterior»**, **«enter»**, **«copia»**, **«pega»**.
+
+Los alias de aplicaciones se resuelven localmente; errores breves de nombre sólo se aceptan con una coincidencia única. Un empate pide un nombre más preciso. Los atajos y las acciones dependen de la app activa y de lo que permita macOS; el navegador debe estar activo para sus órdenes específicas.
+
+### Dictar, elegir campos y activar controles
+
+1. Activa una aplicación con un campo editable y concede Accesibilidad.
+2. Di **«Computadora, escribe Hola, José»**. Se conserva el texto reconocido, con mayúsculas, acentos y signos; no es un modo de dictado continuo sin órdenes.
+3. Para un campo concreto, prueba **«enfoca Nombre»** o **«escribe Hola, José en el campo Nombre»**. **«Borra el campo»** elimina su contenido y **«selecciona el texto Buenos días»** intenta seleccionar esa cadena en el campo activo.
+4. Di **«selecciona Contacto»** y después **«pulsa lo seleccionado»**, o directamente **«clic en Contacto»**. También admite **«presionar el botón Contacto»**, **«dar anticlick»** y **«clic derecho»**.
+
+En **Ayuda**, **Buscar campos de texto** equivale a **«muestra campos»** y **Acciones de la app activa** a **«muestra comandos»**. Para un menú expuesto por la app, prueba **«ejecuta la acción Exportar PDF»**.
+
+Si hay varias opciones, el panel presenta páginas de hasta **seis elecciones numeradas**. Responde **«la segunda»**, **«número dos»** o un nombre único; también puedes pulsar el botón. **Siguiente** muestra más y **Cancelar** abandona la elección. Caduca a los **45 segundos** y se cancela si cambia la aplicación; antes de actuar se comprueba también la ventana de destino.
+
+La lectura, el foco y la activación dependen de los controles que cada aplicación publique mediante Accesibilidad (AX). No se garantiza acceso a lienzos, juegos o controles sin nombres accesibles. Los campos protegidos de contraseña se excluyen de lectura y dictado. Si cambias de campo o aplicación durante el dictado, se detiene para evitar escribir en otro destino.
+
+### Leer con TalkBack y lectura manual
+
+En **Lectura y filtros**, activa **Leer en voz alta el elemento bajo el cursor** y mantén el puntero sobre un control. Funciona tanto con ratón físico como con cámara. Es TalkBack de Adapta PE basado en AX; no reemplaza el lector VoiceOver del sistema.
+
+**Leer ventana activa** o **«lee la pantalla»** leen el texto accesible de la ventana; no hacen OCR ni envían una imagen a una IA. **«Leer el botón Contacto»** pide un elemento concreto. Usa **Detener lectura** o **«Computadora, silencio»** para interrumpir. Durante la salida hablada se filtran órdenes ordinarias para evitar el eco; **«Computadora, detener todo»** permite parar la asistencia.
+
+## Cursor con cámara: calibrar antes de usar
+
+En **Control → Adaptar a mi movimiento**, elige **Control con**:
+
+- **Cabeza / torso**: mantén una postura cómoda mientras aprende el reposo. Requiere al menos cuatro muestras distintas y 900 ms de estabilidad. La cabeza usa rostro/nariz y giro, con respaldo corporal.
+- **Brazos, manos o puños**: parte de la primera posición fiable como reposo. Desplaza ligeramente la zona visible y mantén la dirección; volver al inicio detiene el cursor. Usa muñeca y respaldo de muñecas/codos, sin elegir hombros como control de este modo.
+- **Zona con textura**: rastrea un detalle que se mueve en la imagen, sin clasificar anatomía. Necesita textura visible; superficies uniformes, patrones repetidos y oclusiones pueden impedir el seguimiento. Tras una pérdida prolongada necesita adquirir otro detalle.
+
+Luego:
+
+1. Elige **Cámara** en Dispositivos y preferencias. Autoriza Cámara y Accesibilidad.
+2. Enciende **Cursor con cámara**. La vista muestra zona segura verde, punto blanco y progreso del clic.
+3. Pulsa **Calibrar** si cambias de postura. Ajusta **Velocidad**, **Reducir temblores** y **Adaptar a movimientos pequeños** a tu movimiento real.
+4. Si deseas clic por permanencia, activa **Clic al mantener la postura** y ajusta **Espera de clic** entre 0,4 y 3 segundos. Sal del anillo de atracción para armarlo, vuelve a reposo sobre el mismo destino y espera. Produce un clic por entrada; descansar no debe repetirlo.
+5. Usa **Pausar cursor** / **Reanudar cursor**, o mueve el ratón físico: éste pausa el control por cámara durante dos segundos y reinicia la referencia. **Detener todo** apaga la asistencia.
+
+Por voz: **«control cabeza»**, **«control manos»**, **«control brazo izquierdo»**, **«control zona libre»**, **«calibrar cursor»**, **«activar temblor»**, **«movimientos pequeños»**, **«cursor más lento»**, **«pausar cursor»**, **«reanudar cursor»**, **«siguiente clic derecho»** y **«cancelar clic»**.
+
+Pérdidas, pausas, calibración, cambios de fuente y huecos de más de 200 ms desarman el clic. La atracción a controles accesibles cercanos es suave y acotada; no arma el clic por sí sola. Vision aporta puntos 2D: no se atribuye profundidad 3D ni se promete precisión universal con amputaciones o movilidad reducida. La calibración y los gestos deben probarse con cada persona y equipo.
+
+## Color, mascotas y panel flotante
+
+En **Lectura y filtros → Filtro de pantalla** elige Protanomalía, Protanopía, Deuteranomalía, Deuteranopía, Tritanomalía, Tritanopía o Acromatopsia. Concede Grabación de pantalla y espera el estado **Activo**; **Quitar filtro** lo retira. También funcionan **«filtro deuteranopía»** y **«quitar filtro»**.
+
+Son matrices de simulación de color, no una corrección médica del daltonismo. La composición es local por monitor, con ScreenCaptureKit y Core Image. La capa espera el primer cuadro antes de mostrarse; una entrega tardía no debe reaparecer después de detenerla. Adapta PE queda fuera del filtro para conservar el acceso a sus controles. Contenido protegido, escritorios seguros y algunos juegos o ventanas pueden impedir captura o superposición; no se eluden esas restricciones.
+
+En **Mascota → Tu mascota**, elige **Tinku · gallito**, **Cuchu · cuy**, **Yati · llama** o **Sin mascota** (valor inicial). **Saludar**, **Dormir** y **Despertar** controlan sus estados. Arrastra su nombre entre pantallas, usa **Mover con teclas** y las flechas, termina con Escape, o pulsa **Otro monitor**. El dibujo deja pasar los clics; se recuerda su posición. La animación respeta movimiento reducido y suspensión, y descansa tras 90 segundos sin interacción. Dormir manualmente exige Despertar.
+
+Por voz, después de llamar al asistente: **«mascota Cuchu»**, **«elige mascota Tinku»**, **«mascota Yaty»**, **«oculta mascota»**, **«saluda mascota»**, **«duerme mascota»** y **«despierta mascota»**. Buscar o dictar esos nombres conserva el texto.
+
+Pulsa **Usar panel** para mantener controles compactos sobre otras apps. Incluye **Voz**, **Cursor**, transcripción, respuesta, elecciones y **Detener todo**. En **Opciones** puedes elegir mascota, filtro, esquina y monitor. Desmarcar **Mostrar cámara** oculta la vista previa; no apaga el cursor. **Abrir ajustes**, con el icono de engranaje, vuelve a la ventana principal.
+
+El título del panel se arrastra o se mueve con flechas al enfocarlo. **Mover mascota y panel juntos** coloca la mascota encima y permite mover ambos. También admite **«une mascota al panel»**, **«separa mascota del panel»**, **«panel esquina superior izquierda»** y **«mueve el panel a la esquina inferior derecha»**.
+
+### Cerrar ajustes y continuar en segundo plano
+
+Cerrar la ventana mantiene la app activa. En la barra de menú, **Abrir ajustes**, **Mostrar panel flotante**, **Activar voz**, **Activar cursor**, **Pausar cursor** y **Detener todo** permiten continuar. **Salir de Adapta PE** termina el proceso.
+
+**Iniciar al encender el Mac**, en Dispositivos y preferencias, registra el inicio de sesión. El primer uso comienza con módulos apagados; después se recuerdan preferencias y módulos activos y sólo se restauran permisos ya concedidos. **Detener todo** deja los módulos apagados para el siguiente inicio. Dormir libera capturas; despertar intenta restaurar lo que estaba activo. El atajo **⌘⇧.** ejecuta Detener todos los módulos cuando lo recibe la app.
+
+## IA externa opcional y privacidad
+
+Para usar un proveedor compatible con `chat/completions`:
+
+1. En **IA opcional**, enciende **Activar IA con mi API key**.
+2. Completa **Endpoint HTTPS de chat/completions** y **Modelo disponible en tu proveedor**.
+3. Introduce **API key personal** y pulsa **Guardar en Llavero**. Puedes retirarla con **Eliminar clave**.
+4. Di **«Computadora, pregunta a la IA …»**. Sólo se envía la consulta explícita; las órdenes desconocidas no se envían automáticamente. **Cancelar consulta** interrumpe la petición pendiente.
+
+Se admite HTTP únicamente en loopback real (`localhost`, `127.0.0.0/8` o `::1`); los destinos remotos requieren HTTPS. Cambiar el endpoint cancela la consulta, borra la clave anterior del Llavero y revoca el permiso de envío de pantalla. Si no puede borrar la clave, conserva el endpoint anterior. Guarda la clave del nuevo destino y vuelve a autorizar la pantalla si la necesitas. Las respuestas tienen un límite de 64 KiB y no se siguen redirecciones. Los costes y el tratamiento de datos dependen del proveedor.
+
+**«Analiza pantalla con IA»** requiere **Permitir envío de pantalla al proveedor** durante esa sesión, un modelo con imágenes y Grabación de pantalla. Antes del envío aparece **Enviar el monitor principal completo**, con **Enviar** y **Cancelar**: oculta datos privados antes de confirmar. **«Lee la pantalla»** siempre sigue usando AX local.
+
+Cámara, seguimiento, TalkBack y filtros se procesan localmente. La app no guarda imágenes, posturas, grabaciones ni transcripciones; lo mostrado vive en memoria. Preferencias, dispositivos, posición y módulos activos sí se recuerdan en UserDefaults. La clave se guarda en Llavero, no en el repositorio. El reconocimiento de Apple por red y la IA externa son dos salidas de datos diferentes y requieren sus respectivas opciones.
+
+## Si algo no funciona en macOS
+
+| Síntoma | Qué revisar |
+| --- | --- |
+| Xcode falla por firma o equipo no disponible. | Selecciona tu equipo en Signing & Capabilities. Para comprobar sólo compilación usa `CODE_SIGNING_ALLOWED=NO`; eso no valida ejecución ni distribución. Comprueba `xcodebuild -version` y que esté seleccionado Xcode completo. |
+| La voz queda apagada o indica permiso denegado. | Revisa Micrófono y Reconocimiento de voz, selecciona el dispositivo correcto y pulsa Actualizar dispositivos y permisos. Comprueba si otra app ocupa el dispositivo. |
+| «Español local no disponible». | Revisa los recursos de dictado de español del Mac; si aceptas el procesamiento de Apple por red, activa su opción explícita. No se sustituye silenciosamente por una API generativa. |
+| Escucha, pero no ejecuta. | Mira Escuché:, usa la palabra personal correcta y una orden de ejemplo. Tras decir sólo el nombre hay ocho segundos. Comprueba Accesibilidad y la app de destino. |
+| El dictado no escribe o se detiene. | Enfoca un campo editable accesible. Las contraseñas están excluidas; cambiar de campo o ventana puede cancelar la acción. Prueba muestra campos. |
+| No controla pestañas o sitios en el navegador. | Activa Safari, Chrome, Brave o Edge y revisa Automatización para ese navegador. Una app sin AX limita menús, lectura y selección. |
+| Cámara ausente o cursor quieto. | Revisa Cámara y Accesibilidad, el selector y el estado Pausado. Actualiza dispositivos tras desconectar una cámara. Recalibra; en manos/textura empieza con movimiento leve y detalle visible. |
+| El cursor se pausa al tocar el ratón. | Es intencional: espera dos segundos y restablece una postura estable, o usa Reanudar cursor si lo pausaste manualmente. |
+| No se produce el clic por permanencia. | Activa Clic al mantener la postura, sal del anillo, vuelve al mismo destino y espera. Una pérdida o cambio de destino desarma el clic; no insiste mientras permaneces en reposo. |
+| TalkBack no lee un control. | Revisa Accesibilidad y que el control publique texto AX. La lectura manual no realiza OCR. Prueba VoiceOver o el cursor si esa app no expone controles. |
+| El filtro queda preparando o no cubre una app. | Revisa Grabación de pantalla y reinicia si macOS lo solicita. Prueba Quitar filtro y vuelve a activarlo. Contenido protegido o presentación exclusiva pueden impedirlo; no hay garantía sobre esas superficies. |
+| Cerrar la ventana no apaga micrófono/cámara. | Cerrar ajustes mantiene la asistencia. Pulsa Detener todo o Salir de Adapta PE desde la barra de menú. |
+| La IA devuelve error HTTP, clave ausente o respuesta incompatible. | Revisa endpoint completo, modelo, clave, cuota y compatibilidad chat/completions. Cambiar endpoint borra la clave anterior. Un modelo sólo de texto no puede analizar imágenes. |
+
+Para diagnóstico, `./script/build_and_run.sh --logs` recompila y abre la app antes de mostrar logs. En Xcode, la consola se abre con **⇧⌘Y**. Los logs propios de voz usan `pe.adapta.desktop`, categoría `voice`, sin texto dictado ni grabaciones. Avisos como `AddInstanceForFactory` o ViewBridge también pueden proceder de servicios del sistema; no demuestran por sí solos el fallo de una orden.
+
+## Cómo funciona este proyecto
+
+La voz sigue **AVFoundation → Speech → VoiceInputState → CommandParser → ActionManager → AX / CGEvent / Apple Events**. El parser prepara cortesía y variantes españolas, pero conserva el contenido de dictado, selección y consultas. «Por favor abre Safari», «quiero que abras Safari» y «ábrame Safari» comparten intención. Las partículas ambiguas finales «pe» y «pues» sólo se retiran con coma previa, para conservar nombres como Adapta PE.
+
+El cursor sigue **cámara → Vision o correlación de textura → GestureState / KineticState → movimiento y clic**. La vista previa usa `AVCaptureVideoPreviewLayer`, independiente de la inferencia serial, que descarta imágenes atrasadas. La captura solicita 640×480 a 30 FPS y textura trabaja a 160×120; son parámetros solicitados, no mediciones garantizadas de rendimiento.
+
+| Fuente | Responsabilidad |
+| --- | --- |
+| [Adapta_PEApp.swift](Adapta-PE/Adapta_PEApp.swift) | `AppModel`, ciclo de vida, permisos, barra de menú, memoria de sesión, reposo y panel. |
+| [ContentView.swift](Adapta-PE/ContentView.swift) | Ajustes SwiftUI y `FloatingView` (está en este mismo archivo). |
+| [VoiceManager.swift](Adapta-PE/VoiceManager.swift) y [VoiceInputState.swift](Adapta-PE/VoiceInputState.swift) | Audio, Speech, recuperación, activación personal y coordinación con síntesis de voz. |
+| [CommandParser.swift](Adapta-PE/CommandParser.swift) y [ActionManager.swift](Adapta-PE/ActionManager.swift) | Intenciones, sitios, atajos, ejecución, elecciones y respuestas habladas. |
+| [ApplicationCatalog.swift](Adapta-PE/ApplicationCatalog.swift) | Catálogo y alias de apps instaladas. |
+| [DesktopAccess.swift](Adapta-PE/DesktopAccess.swift) | AX, campos, menús, foco, dictado Unicode, selección y TalkBack. Las búsquedas tienen límites de nodos y tiempo. |
+| [TrackingManager.swift](Adapta-PE/TrackingManager.swift), [GestureState.swift](Adapta-PE/GestureState.swift), [KineticState.swift](Adapta-PE/KineticState.swift) y [ZoneTracker.swift](Adapta-PE/ZoneTracker.swift) | Captura, detección por modo, postura, suavizado por tiempo, textura y permanencia. |
+| [ColorFilterManager.swift](Adapta-PE/ColorFilterManager.swift) | Matrices y composición local por pantalla. |
+| [Mascot.swift](Adapta-PE/Mascot.swift) y [recursos de mascotas](Adapta-PE/Mascotas/) | Atlas elegido, animación, ventanas y controles. |
+| [OptionalAI.swift](Adapta-PE/OptionalAI.swift) | Llavero, endpoint, peticiones explícitas, captura consentida y cancelación. |
+
+Consulta [docs/PARIDAD.md](docs/PARIDAD.md) para equivalencias con las extensiones y límites de validación. [AdaptaPE.md](AdaptaPE.md) es una guía de portabilidad y objetivos del ecosistema; sus objetivos no son certificaciones de esta edición.
+
+## Desarrollo y pruebas
+
+Desde la raíz, con Xcode completo seleccionado:
 
 ```sh
+# Sólo compilación Debug, sin firma de distribución.
 xcodebuild -project Adapta-PE.xcodeproj -scheme Adapta-PE \
   -configuration Debug -derivedDataPath /tmp/adapta-pe-build \
   CODE_SIGNING_ALLOWED=NO build
 
+# Pruebas de lógica de Base.
 xcodebuild -project Adapta-PE.xcodeproj -scheme Adapta-PE \
   -destination 'platform=macOS' -derivedDataPath /tmp/adapta-pe-build \
   -only-testing:Adapta-PETests CODE_SIGNING_ALLOWED=NO test
 ```
 
-La prueba de UI usa el target `Adapta-PEUITests` y requiere autorización de Xcode para automatizar la interfaz. No activa sensores ni IA. Para distribución se requiere firma y notarización normales; no se necesita desactivar Gatekeeper.
+El target `Adapta-PETests` cubre parser, activación personal, Unicode, elecciones, postura y clic con datos sintéticos, filtros y regresiones de IA con respuestas simuladas. No usa una API real ni acredita sensores físicos.
 
-También puedes usar `./script/build_and_run.sh`: detiene la instancia anterior, compila y abre el bundle. `--debug` abre el proyecto para ejecutar desde Xcode; `--logs` y `--telemetry` muestran logs. Conserva la firma configurada en el proyecto.
+Para la interfaz, configura firma y permisos de automatización/Accesibilidad de Xcode y su runner en el Mac donde vayas a probar:
 
-## Primer uso
+```sh
+xcodebuild -project Adapta-PE.xcodeproj -scheme Adapta-PE \
+  -destination 'platform=macOS' -only-testing:Adapta-PEUITests test
+```
 
-1. Autoriza **Accesibilidad** desde el botón en ajustes para cursor, teclado y lectura AX.
-2. Elige cámara y modo de control. Activa Mouse cinético y mantén postura cómoda si elegiste cabeza/torso; en manos o zona basta un gesto breve.
-3. Sal del anillo y vuelve al centro; mantener el mismo objetivo realiza un clic. Para otro clic, vuelve a salir.
-4. Activa comandos por voz. macOS pedirá micrófono y reconocimiento de voz. Por defecto se exige soporte local de español; la opción de red de Apple es independiente y explícita.
-5. Usa **Panel flotante** o cierra ajustes. La app sigue disponible en la barra de menú. **Detener todo** apaga sensores, lectura, filtros y peticiones pendientes. **Salir** termina la app.
+La prueba de UI recorre ajustes, panel y continuidad en segundo plano con `--uitesting`; no activa sensores ni una API real. Puede fallar antes de conectar con el runner si el entorno no está autorizado. No se presenta como aprobada por haber compilado el target.
 
-Grabación de pantalla sólo se solicita al activar filtros o captura opcional para IA. Automatización se solicita cuando un navegador compatible necesita Apple Events. El primer lanzamiento comienza apagado. Después se recuerdan los módulos activos, dispositivos, palabra de activación, velocidad, pausa y filtros; se restauran sólo permisos ya concedidos. Cerrar o salir conserva esa memoria. «Detener todo» deja los módulos apagados para el próximo inicio. No se guardan grabaciones ni transcripciones. Dormir/despertar restaura los módulos que estaban activos; no conserva grabaciones.
+**Estado de esta revisión documental (18 de octubre de 2026):** comandos contrastados con el proyecto, script y targets por lectura; no se ejecutaron builds, tests ni instaladores. [docs/PARIDAD.md](docs/PARIDAD.md) conserva resultados históricos y pendientes. Quedan por validar en hardware real reconocimiento hablado, cámara y gestos, permisos de una instalación limpia, Intel, varios monitores, juegos, consumo y latencia. Mínimo declarado 14.0 no significa prueba en cada versión posterior de macOS.
 
-## Comandos
+### Actualizar o desinstalar
 
-Precede cada orden con «Computadora» o la palabra elegida. Después de decir sólo el nombre, tienes 8 segundos para dar el comando.
+Para actualizar desde fuentes, sal de la app, conserva tus cambios propios, ejecuta `git pull --ff-only`, vuelve a compilar y reemplaza tu copia local. Si cambias firma o ubicación, revisa otra vez los permisos.
 
-- «Abre YouTube», «busca movilidad en Wikipedia», «abre Google en nueva pestaña».
-- «Nueva pestaña», «abre una nueva ventana de Chrome», «abre Chrome en nueva ventana», «cierra esta pestaña», «atrás», «recarga».
-- «Guardar», «guardar como», «imprimir», «Spotlight», «Mission Control», «mostrar escritorio», «pantalla completa».
-- «Presiona comando shift N», «atajo control option arriba», «campo siguiente», «campo anterior».
-- «Muestra comandos», «ejecuta la acción Exportar PDF»: consulta o activa los menús accesibles de la app.
-- «Muestra campos», «enfoca Nombre», «escribe Hola, José en el campo Nombre», «selecciona el texto Buenos días».
-- «Escribe Hola, José», «enfoca buscar», «borra el campo», «enter», «copia», «pega».
-- «Selecciona Contacto», «pulsa lo seleccionado», «clic en Contacto», «clic derecho».
-- «Control cabeza», «control brazo izquierdo», «control zona libre», «calibrar cursor».
-- «Activar temblor», «movimientos pequeños», «cursor más lento», «pausar cursor», «reanudar cursor».
-- «Siguiente clic derecho», «cancelar clic», «activar TalkBack», «lee la pantalla».
-- «Filtro deuteranopía», «quitar filtro», «mostrar ajustes», «modo flotante», «detener todo».
-- «Abre Zoom», «ejecutar visual studio code», «mostrar VS Code en el monitor dos».
-- «Dar anticlick», «presionar el botón Contacto», «leer el botón Contacto».
+Para desinstalar, desactiva **Iniciar al encender el Mac**, pulsa **Eliminar clave** si usaste IA, sal y elimina el bundle. Borrar la aplicación por sí solo no elimina preferencias ni una clave conservada en Llavero. Los instaladores generados, DerivedData, builds, logs y credenciales quedan fuera del flujo de fuentes del repositorio.
 
-Los nombres se comparan sin distinguir mayúsculas/acentos. Alias de apps y errores de hasta dos letras se resuelven localmente cuando hay una única coincidencia; un empate exige un nombre más preciso. El catálogo se consulta fuera del hilo principal y se conserva un minuto. Los monitores se numeran como se muestran en Dispositivos y preferencias. Durante la lectura puedes interrumpir con «Computadora, silencio» o «Computadora, detener todo».
+## Ediciones relacionadas y licencia
 
-Safari, Chrome, Brave y Edge admiten control de destinos y búsqueda contextual con Automatización. En otras aplicaciones la lectura y selección dependen de los elementos accesibles publicados. Campos protegidos no se leen ni se dictan. Los filtros reproducen matrices de simulación de color; no son una corrección médica del daltonismo.
+- [Extensión Adapta PE Base](https://github.com/TheAlejo160/Adapta-PE): herramientas de accesibilidad dentro del navegador.
+- [Extensión Adapta PE Lite](https://github.com/TheAlejo160/Adapta-PE-Lite): edición ligera del navegador.
+- [Adapta PE Lite para macOS](https://github.com/TheAlejo160/Adapta-PE-Lite-MacOS): aplicación nativa independiente.
+- [Adapta PE Base para Windows](https://github.com/TheAlejo160/Adapta-PE-Win) y [Adapta PE Lite para Windows](https://github.com/TheAlejo160/Adapta-PE-Lite-Win): proyectos de escritorio para Windows.
+- [Sitio oficial de Adapta PE](https://www.adaptape.cc).
 
-## IA opcional
+Cada edición tiene sus permisos, versiones y requisitos. Un ZIP de la extensión no instala esta aplicación.
 
-En **IA opcional**, activa la integración, configura un endpoint HTTPS compatible con `chat/completions`, indica un modelo disponible en tu proveedor y guarda tu API key en Llavero. HTTP sólo se acepta en este equipo (localhost, 127.x.x.x o ::1). Cambiar el endpoint cancela la consulta, borra la clave guardada y retira el permiso de pantalla; si el Llavero no la borra, se conserva el endpoint anterior. Las respuestas se cortan a 64 KiB y no se siguen redirecciones. El proveedor puede cobrar según sus condiciones. La app no incluye créditos ni una clave.
-
-«Pregunta a la IA …» envía sólo esa consulta. Los comandos desconocidos no se envían automáticamente. «Lee la pantalla» sigue siendo lectura AX local. «Analiza pantalla con IA» requiere activar **Permitir envío de pantalla al proveedor** durante esa sesión, además del permiso del sistema y un modelo que acepte imágenes. Esa captura puede incluir información privada.
-
-## Compatibilidad comprobada
-
-Deployment target 14.0 y frameworks públicos. Las regresiones automáticas no reemplazan pruebas físicas de cámara, micrófono, permisos, múltiples monitores y cada versión de macOS. Consulta la lista de validación y diferencias en `docs/PARIDAD.md`; no se afirma compatibilidad completa 14–27 sólo por compilar.
-
-## Diagnóstico de voz
-
-La captura descarta muestras inválidas o sin PCM antes de entregarlas a Speech. Los cambios de tarea se ordenan en la cola de audio sin bloquear la interfaz. Si no llegan tramas válidas durante 4 segundos, se intenta recuperar la captura con espera progresiva. Una lectura sin progreso durante 8 segundos se detiene para liberar la escucha. Las devoluciones de una locución antigua no cancelan otra nueva.
-
-En Xcode, ejecuta el esquema Adapta-PE y abre la consola (`⇧⌘Y`). Los logs propios usan `pe.adapta.desktop`, categoría `voice`, sin texto dictado ni grabaciones. `AddInstanceForFactory`, UUID de cámaras y ViewBridge también pueden venir de servicios/controladores del sistema: esta revisión no promete eliminarlos. Las desconexiones físicas, el español local y la ruta de audio de cada dispositivo requieren prueba en el equipo del usuario.
-
-### Escucha al cambiar de aplicación
-
-Con Voz activa, abrir otra app o tapar/cerrar ajustes mantiene la captura y el reconocimiento. Una actividad nativa evita App Nap durante la escucha y se libera al detener voz o dormir el Mac; no impide el reposo del sistema. Los cambios de app y el chequeo de salud recuperan tareas de reconocimiento ya terminadas.
-
-La transcripción de Speech se trata como una frase completa corregible, sin descartar palabras por conteos anteriores. Tras una activación u orden se prepara otra tarea. El sonido de «Computadora» se reproduce al instalar la siguiente petición, para que puedas decir el comando después de la señal. Decir sólo «Computadora» también interrumpe la lectura y abre la espera de ocho segundos. Durante una lectura, órdenes ordinarias del propio audio no se ejecutan.
-
-También se aceptan partes del nombre de una app con coincidencia única: «abre Visual Studio» o «abre Workplace». Si varias apps coinciden, di un nombre más completo. Las coincidencias exactas tienen prioridad y un nombre como `zoom.us` se comprueba como app antes de abrirlo como dominio.
-
-### Elecciones y seguimiento en segundo plano
-
-Los controles ambiguos y la búsqueda de campos ofrecen hasta seis opciones por página. Responde con el número, «la segunda», un nombre único, «siguiente» o «cancelar». Mientras haya una elección pendiente puedes responder sin repetir la palabra de activación, después de escuchar las opciones. Decir la palabra de activación interrumpe la lectura. Una orden distinta sustituye la elección; cambiar de app o esperar 45 segundos la cancela. Dictar sin campo activo permite elegir dónde escribir antes de insertar texto. Los campos protegidos quedan excluidos.
-
-Con voz activa, el panel flotante aparece al pasar a otra aplicación o cerrar ajustes. Muestra la última transcripción y respuesta, sin tomar el foco. Las opciones se pueden elegir por voz o pulsándolas. En Ayuda también puedes consultar acciones y campos de la aplicación externa activa.
-
-Las acciones específicas se descubren en los menús que cada aplicación expone por Accesibilidad; no existe un catálogo universal de todos sus comandos internos. Si la app no expone un menú o campo, Adapta PE lo indica; puedes usar un atajo conocido. Los atajos nombrados usan códigos virtuales de teclado macOS (disposición estándar); los menús respetan las acciones de cada aplicación. No se ejecutan scripts de shell dictados.
-
-### PiP anclado
-
-El panel compacto admite arrastre libre y anclaje a las cuatro esquinas. **Opciones** reúne mascota, unión/separación, filtros, vista de cámara y monitor. Guarda la posición relativa; elegir esquina vuelve al anclaje. La mascota unida queda encima y se reserva su espacio al cambiar el tamaño. Las elecciones conservan desplazamiento y acceso a Detener todo.
-
-Voz y cursor se activan desde Ajustes o la barra de menú. El PiP conserva estado, transcripción, respuesta y Detener todo, y sólo muestra botones de elección cuando hay una pregunta pendiente.
-
-## Documentación del código
-
-| Archivo | Función actual |
-| --- | --- |
-| [Adapta_PEApp.swift](Adapta-PE/Adapta_PEApp.swift) | Entrada Base, AppModel, barra de menú, PiP, permisos, memoria de sesión y reposo. |
-| [ContentView.swift](Adapta-PE/ContentView.swift) | Ajustes y panel flotante nativos SwiftUI/AppKit. |
-| [VoiceManager.swift](Adapta-PE/VoiceManager.swift) | Captura AVFoundation, reconocimiento Speech español, recuperación y coordinación con TTS. |
-| [VoiceInputState.swift](Adapta-PE/VoiceInputState.swift) | Activación de ocho segundos, deduplicación e interrupciones durante lectura. |
-| [CommandParser.swift](Adapta-PE/CommandParser.swift) | Parser de intenciones, catálogo de sitios, atajos y elecciones. |
-| [ActionManager.swift](Adapta-PE/ActionManager.swift) | Ejecuta órdenes, coordina destino externo, TTS, navegador y opciones numeradas. |
-| [ApplicationCatalog.swift](Adapta-PE/ApplicationCatalog.swift) | Alias/catálogo de aplicaciones y resolución local de nombres. |
-| [DesktopAccess.swift](Adapta-PE/DesktopAccess.swift) | Árbol AX, campos, menús, selección, entrada CGEvent y TalkBack de Base. |
-| [TrackingManager.swift](Adapta-PE/TrackingManager.swift) | Captura de cámara, Vision/seguimiento por modo, preview y movimiento. |
-| [KineticState.swift](Adapta-PE/KineticState.swift) | Postura de referencia, suavizado temporal, zona segura y dwell. |
-| [ColorFilterManager.swift](Adapta-PE/ColorFilterManager.swift) | Siete matrices, captura/composición local de pantallas y retirada del filtro. |
-| [OptionalAI.swift](Adapta-PE/OptionalAI.swift) | Consulta HTTPS explícita, cancelación, consentimiento de pantalla y clave en Llavero. |
-| [script/](script/) y targets `*Tests` / `*UITests` | Compilación/lanzamiento y comprobaciones de lógica/interfaz. |
-
-La voz recorre **AVFoundation → Speech → VoiceInputState → CommandParser → ActionManager → AX/CGEvent/Apple Events → respuesta**. La UI no se convierte en destino al mostrar elecciones. El dictado conserva Unicode; la normalización se limita a intenciones/nombres. Los recorridos AX tienen límites y las acciones revalidan la aplicación. Una app que no exponga controles accesibles limita lo que se puede leer o activar.
-
-Base recorre **cámara → detección Vision o textura → KineticState → cursor y dwell**, con calibración y sin grabar imágenes. Los filtros tienen un coste distinto de CSS web porque componen pantallas localmente. [docs/PARIDAD.md](docs/PARIDAD.md) documenta las equivalencias y la validación física pendiente.
-
-Lite reside en la carpeta y proyecto independientes `Adapta-PE-Lite`, con fuentes locales de voz y filtros. No requiere archivos de este repositorio. Su README documenta compilación, permisos y pruebas.
-
-## Archivos públicos y privacidad del desarrollo
-
-`.gitignore` conserva fuentes, proyectos Xcode, assets, documentación, pruebas y esquemas compartidos. Excluye DerivedData, builds, DMG/APP generados, `xcuserdata`, ajustes de IDE, memoria local de agentes, logs y credenciales. El DMG histórico del equipo no forma parte del flujo reproducible actual ni se publica como instalador validado de esta revisión.
-
-La clave de IA se guarda en Llavero, nunca en el repositorio. Las pruebas automáticas no usan proveedores reales por defecto. © 2026 Rodrigo Alejandro Apcho Aliaga — TheAlejo160. Se conserva [LICENSE](LICENSE), Creative Commons Atribución-NoComercial-CompartirIgual 4.0, y las atribuciones existentes. La publicación de fuentes no cambia sus condiciones de reutilización.
-
-## Verificación de la documentación
-
-El 3 de octubre de 2026 se comprobaron los comandos de Xcode con Xcode 27: pasaron 21 pruebas de Base; Lite se verifica desde su proyecto independiente, sin activar sensores ni IA. No se repitieron pruebas UI ni se acreditó firma/notarización de distribución. El índice se regeneró para contrastar el mapa; el hueco de parseo en Adapta_PEApp.swift:98 se leyó directamente y la configuración Xcode se verificó por fuente.
-
-## Proyectos de la familia Adapta PE
-
-| Programa | Código y alcance |
-| --- | --- |
-| Extensión Base | [Adapta-PE](https://github.com/TheAlejo160/Adapta-PE): voz, filtros, cursor de página y TalkBack. |
-| Extensión Lite | [Adapta-PE-Lite](https://github.com/TheAlejo160/Adapta-PE-Lite): voz y filtros. |
-| Windows Base | [Adapta-PE-Win](https://github.com/TheAlejo160/Adapta-PE-Win): aplicación WPF independiente. |
-| Windows Lite | [Adapta-PE-Lite-Win](https://github.com/TheAlejo160/Adapta-PE-Lite-Win): voz, lectura manual y filtros. |
-| macOS completo | [Adapta-PE-MacOS-Intel-Apple-Silicon-](https://github.com/TheAlejo160/Adapta-PE-MacOS-Intel-Apple-Silicon-): aplicación completa en su proyecto Xcode. |
-| macOS Lite independiente | [Adapta-PE-Lite-MacOS](https://github.com/TheAlejo160/Adapta-PE-Lite-MacOS): voz y filtros en un proyecto autónomo. |
-
-Los números de versión y permisos pertenecen a cada plataforma. Un ZIP de la extensión no instala la aplicación de escritorio. Los repositorios publican fuentes y recursos necesarios; los instaladores generados y la configuración personal quedan fuera de Git.
-
-## Filtros: presentación segura (17 de octubre de 2026)
-
-El filtro espera una imagen procesada antes de mostrar su ventana, evitando una cubierta negra al arrancar. Detener invalida inmediatamente la presentación: un cuadro que ya estaba en camino no vuelve a mostrarla. El estado informa de filtro activo al recibir el primer cuadro. Se mantienen las matrices, el permiso de Grabación de pantalla y el procesamiento local en memoria.
-
-FilterPresentationTests.testFirstImageAndCancellation usa una imagen sintética para probar la primera presentación, un solo aviso inicial y el rechazo después de invalidar. Esta prueba no acredita captura real, contenido protegido, monitores ni rendimiento físico.
-
-### Llamada personal y parada durante lectura: 17 de octubre de 2026
-
-La activación de voz ahora compara acentos y espacios equivalentes sin perder los índices del texto original. Una llamada personalizada como «Máquina Azul» admite transcripción sin tilde y espacios variables; el contenido que sigue conserva acentos, mayúsculas y espacios. Durante TTS, «por favor detén todo» atraviesa la protección de eco y llega a la parada global; dictado y búsquedas conservan su contenido. PersonalWakeTests y GlobalStopTests pasaron con Xcode en macOS Apple Silicon. Son pruebas textuales, no validación del micrófono ni del reconocimiento acústico.
-
-### Contraste, foco y micrófono: 17 de octubre de 2026
-
-El fondo de cabecera usa una capa negra del 60 % para que el subtítulo blanco mantenga contraste incluso sobre zonas claras (peor caso calculado 5,74:1). Los botones propios añaden un indicador interior de foco por teclado. El selector conserva Predeterminado y la selección válida; actualizar un ID retirado vuelve a Predeterminado. Una captura solicitada con un micrófono explícito ausente falla en lugar de usar silenciosamente otro dispositivo. Las pruebas de selección con IDs sintéticos y la compilación pasaron; no se validaron desconexión física, dibujo del foco ni VoiceOver.
-
-La misma política se aplica a cámara Predeterminada y selección explícita. Las tres pruebas seleccionadas de llamada y dispositivos pasaron; los casos usan IDs sintéticos y no comprueban desconexión física.
+© 2026 Rodrigo Alejandro Apcho Aliaga — TheAlejo160. Fuentes y recursos se distribuyen bajo [Creative Commons Atribución-NoComercial-CompartirIgual 4.0 Internacional](LICENSE). Publicar el código no elimina sus condiciones de reutilización. Las mascotas y sus recursos se describen en [Mascotas/README.md](Adapta-PE/Mascotas/README.md).
