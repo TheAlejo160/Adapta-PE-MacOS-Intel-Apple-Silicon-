@@ -1,10 +1,284 @@
 import XCTest
 import AVFoundation
 import CoreMedia
+import Speech
 import AppKit
 @testable import Adapta_PE
 
 final class Adapta_PETests: XCTestCase {
+    func testPermanenciaSeDesarmaTrasSaltosDeMasDe200Milisegundos() {
+        for salto in [0.201, 0.300, 0.500] {
+            for fps in [15.0, 30.0, 60.0] {
+                var state = KineticState(), tiempo = 0.0, clics = 0
+                state.fixedCenter = true; state.calibrate()
+                let centro = CGPoint(x: 0.5, y: 0.5)
+                func alimentar(_ punto: CGPoint, segundos: Double) {
+                    for _ in 0..<Int((segundos * fps).rounded()) {
+                        tiempo += 1 / fps
+                        if state.update(punto, time: tiempo, target: "boton").click { clics += 1 }
+                    }
+                }
+                alimentar(CGPoint(x: 0.8, y: 0.5), segundos: 1)
+                while state.progress == 0 && tiempo < 2 {
+                    tiempo += 1 / fps
+                    _ = state.update(centro, time: tiempo, target: "boton")
+                }
+                XCTAssertGreaterThan(state.progress, 0, "La permanencia debe haber comenzado")
+                tiempo += salto
+                XCTAssertFalse(state.update(centro, time: tiempo, target: "boton").click)
+                XCTAssertEqual(state.progress, 0)
+                alimentar(centro, segundos: 2)
+                XCTAssertEqual(clics, 0, "Salto de \(salto) s a \(fps) FPS exige rearmar")
+                alimentar(CGPoint(x: 0.8, y: 0.5), segundos: 1)
+                alimentar(centro, segundos: 2)
+                XCTAssertEqual(clics, 1, "Debe permitir un clic después de rearmar")
+            }
+        }
+    }
+
+    @MainActor func testInterrupcionesDeLecturaLleganAlEjecutor() {
+        let actions = ActionManager.shared
+        let accionAnterior = actions.appAction, salidaAnterior = actions.speechOutput
+        defer { actions.callar(); actions.appAction = accionAnterior; actions.speechOutput = salidaAnterior }
+        var accion: String?, hablando = true
+        actions.appAction = { accion = $0 }
+        actions.speechOutput = { hablando = $0 }
+        for frase in ["para la lectura", "desactiva voz", "apaga el micrófono", "desactiva el micrófono", "por favor desactiva voz, pe"] {
+            var entrada = VoiceInputState()
+            let orden = entrada.consume("Computadora, " + frase, wakeWord: "computadora", time: 1, speaking: true).command
+            XCTAssertNotNil(orden, frase)
+            guard let orden else { continue }
+            accion = nil; hablando = true
+            actions.procesarIntencion(orden)
+            XCTAssertFalse(hablando, frase)
+            if frase == "para la lectura" {
+                XCTAssertEqual(CommandParser.parse(orden), .silence)
+                XCTAssertNil(accion, "Parar lectura conserva la escucha")
+            } else { XCTAssertEqual(accion, "desactivar voz", frase) }
+        }
+    }
+
+    @MainActor func testPermisoDeMicrofonoTardioNoSolicitaSpeech() async {
+        let voz = VoiceManager()
+        var resolverMicrofono: (@Sendable (Bool) -> Void)?
+        var solicitudesSpeech = 0
+        voz.solicitarMicrofono = { resolverMicrofono = $0 }
+        voz.solicitarReconocimiento = { _ in solicitudesSpeech += 1 }
+        voz.startListening()
+        let resolverAnterior = resolverMicrofono
+        XCTAssertTrue(voz.isStarting)
+        voz.stopListening(remember: false)
+        voz.startListening()
+        resolverAnterior?(true)
+        await withCheckedContinuation { continuacion in DispatchQueue.main.async { continuacion.resume() } }
+        XCTAssertEqual(solicitudesSpeech, 0)
+        XCTAssertTrue(voz.isStarting, "El permiso anterior no altera el nuevo inicio")
+        voz.stopListening(remember: false)
+        resolverMicrofono?(true)
+        await withCheckedContinuation { continuacion in DispatchQueue.main.async { continuacion.resume() } }
+        XCTAssertEqual(solicitudesSpeech, 0)
+        XCTAssertFalse(voz.isStarting); XCTAssertFalse(voz.isListening)
+        XCTAssertEqual(voz.status, "Micrófono apagado")
+    }
+
+    @MainActor func testPermisoSpeechTardioNoReiniciaLaEscucha() async {
+        let voz = VoiceManager()
+        var resolverSpeech: (@Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void)?
+        voz.solicitarMicrofono = { $0(true) }
+        voz.solicitarReconocimiento = { XCTAssertTrue(Thread.isMainThread); resolverSpeech = $0 }
+        voz.startListening()
+        await withCheckedContinuation { continuacion in DispatchQueue.main.async { continuacion.resume() } }
+        XCTAssertNotNil(resolverSpeech)
+        voz.stopListening(remember: false)
+        resolverSpeech?(.authorized)
+        await withCheckedContinuation { continuacion in DispatchQueue.main.async { continuacion.resume() } }
+        XCTAssertFalse(voz.isStarting); XCTAssertFalse(voz.isListening)
+        XCTAssertEqual(voz.status, "Micrófono apagado")
+    }
+
+    func testWakeAliasesAndLiteralSuffix() {
+        for word in ["Computadora", "Computadoras", "Computador"] {
+            var wake = WakePhraseState()
+            XCTAssertTrue(wake.consume(word + ", por favor", wakeWord: "computadora", time: 0).beep)
+            XCTAssertEqual(wake.consume("Abre Safari", wakeWord: "computadora", time: 7.99).command, "Abre Safari")
+            XCTAssertTrue(wake.consume(word, wakeWord: "computadora", time: 10).beep)
+            XCTAssertNil(wake.consume("Abre Safari", wakeWord: "computadora", time: 18).command)
+            XCTAssertEqual(wake.consume("oye   " + word + " escribe Hola,  Perú!", wakeWord: "computadora", time: 20).command, "escribe Hola,  Perú!")
+        }
+        for rejected in ["compu", "ordenador", "supercomputadora", "computadoramente"] {
+            var wake = WakePhraseState()
+            XCTAssertNil(wake.consume(rejected + " abre Safari", wakeWord: "computadora", time: 0).command)
+        }
+        var custom = WakePhraseState()
+        var invalidTime = WakePhraseState()
+        _ = invalidTime.consume("Computadora", wakeWord: "computadora", time: 0)
+        XCTAssertNil(invalidTime.consume("Computadora abre Safari", wakeWord: "computadora", time: .nan).command)
+        XCTAssertEqual(invalidTime.waitingUntil, 0)
+        var input = VoiceInputState()
+        _ = input.consume("Computadora", wakeWord: "computadora", time: 0)
+        input.beginUtterance()
+        XCTAssertNil(input.consume("abre Safari", wakeWord: "computadora", time: .nan, followUp: true).command)
+        XCTAssertEqual(input.waitingUntil, 0)
+        XCTAssertNil(input.consume("abre Safari", wakeWord: "computadora", time: 1).command)
+        XCTAssertEqual(custom.consume("Asistente escribe Hola,  Perú!", wakeWord: "Asistente", time: 0).command, "escribe Hola,  Perú!")
+        XCTAssertNil(custom.consume("Computadora abre Safari", wakeWord: "Asistente", time: 1).command)
+    }
+
+    func testGestureRejectsInvalidOrientationAndBoundsAngles() {
+        let point = CGPoint(x: 0.4, y: 0.4), center = CGPoint(x: 0.5, y: 0.5)
+        var gesture = GestureState()
+        XCTAssertEqual(gesture.update(point, time: 0, tilt: CGPoint(x: CGFloat.nan, y: CGFloat.infinity)), center)
+        XCTAssertEqual(gesture.update(point, time: 0.05, tilt: CGPoint(x: 0.2, y: 0)), center)
+        gesture.reset()
+        _ = gesture.update(point, time: 0, angle: .infinity)
+        XCTAssertEqual(gesture.update(point, time: 0.05, angle: 0), center)
+        gesture.reset()
+        _ = gesture.update(point, time: 0, angle: -.greatestFiniteMagnitude)
+        let bounded = gesture.update(point, time: 0.05, angle: .greatestFiniteMagnitude)
+        XCTAssertTrue(bounded.x.isFinite && bounded.y.isFinite)
+        gesture.reset()
+        _ = gesture.update(point, time: 0, angle: .pi - 0.01)
+        XCTAssertEqual(gesture.update(point, time: 0.05, angle: -.pi + 0.01).x, 0.518, accuracy: 0.000001)
+    }
+
+    func testSpanishPreparationPreservesContent() {
+        for phrase in ["¿puedes abrir Safari?", "escribí Ya pe, abre YouTube.", "oye, búscame Ají de Gallina en YouTube porfa", "no abras Safari", "buscar en la página"] {
+            XCTAssertEqual(CommandParser.prepare(CommandParser.prepare(phrase)), CommandParser.prepare(phrase), phrase)
+        }
+        XCTAssertEqual(CommandParser.parse("escribi\u{301} Hola, José!"), .dictate("Hola, José!"))
+        XCTAssertEqual(CommandParser.parse("seleccione el texto Hola, José!"), .selectText("Hola, José!"))
+        XCTAssertEqual(CommandParser.parse("buscar en la página"), .shortcut("buscar_texto"))
+        for phrase in ["ábrame Safari", "abrí Safari", "¿puedes abrir Safari?", "podrías abrirme Safari por favor", "quiero que abras Safari", "me haces el favor de abrir Safari", "ayúdame a abrir Safari", "oye, porfa abre Safari, pe", "oye, ¿puedes abrir Safari?"] {
+            XCTAssertEqual(CommandParser.parse(phrase), .open("Safari", "actual"), phrase)
+        }
+        XCTAssertEqual(CommandParser.parse("por favor escriba Hola, ¿cómo estás? Gracias pe"), .dictate("Hola, ¿cómo estás? Gracias pe"))
+        XCTAssertEqual(CommandParser.parse("escribí Ya pe, abre YouTube."), .dictate("Ya pe, abre YouTube."))
+        XCTAssertEqual(CommandParser.parse("escribe Hola,  José!"), .dictate("Hola,  José!"))
+        XCTAssertEqual(CommandParser.parse("oye, búscame Ají de Gallina en YouTube porfa"), .search("Ají de Gallina", "youtube", "actual"))
+        XCTAssertEqual(CommandParser.parse("quiero que cierres la pestaña"), .shortcut("cerrar_pestana"))
+        XCTAssertEqual(CommandParser.parse("por favor no abras Safari"), .unknown("no abras Safari"))
+        XCTAssertEqual(CommandParser.parse("busca Adapta PE"), .search("Adapta PE", nil, "actual"))
+        XCTAssertEqual(CommandParser.parse("busca qué significa pues"), .search("qué significa pues", nil, "actual"))
+        XCTAssertEqual(CommandParser.parse("abre Adapta PE"), .open("Adapta PE", "actual"))
+        XCTAssertEqual(CommandParser.parse("buscar campos"), .listFields)
+        XCTAssertEqual(CommandParser.prepare("oye, ¿puedes abrir Safari?"), CommandParser.prepare(CommandParser.prepare("oye, ¿puedes abrir Safari?")))
+    }
+
+    @MainActor func testCourtesyDispatchesFilterCommands() {
+        let actions = ActionManager.shared
+        let oldAction = actions.appAction
+        defer { actions.appAction = oldAction }
+        var action: String?
+        actions.appAction = { action = $0 }
+        actions.procesarIntencion("por favor quitar filtro")
+        XCTAssertEqual(action, "filtro:ninguno")
+        actions.procesarIntencion("oye, filtro deuteranopía")
+        XCTAssertEqual(action, "filtro:deuteranopia")
+    }
+
+    @MainActor
+    func testStoppingRejectsLateTrackingCallbacks() {
+        let tracker = TrackingManager(), token = tracker.currentGeneration
+        var calls = 0
+        tracker.whileCurrent(token) { calls += 1 }
+        XCTAssertEqual(calls, 1)
+        tracker.stopTracking(remember: false)
+        tracker.whileCurrent(token) { calls += 1 }
+        XCTAssertEqual(calls, 1, "Una inferencia antigua no mueve, pulsa ni reactiva salida después de detener")
+        XCTAssertNotEqual(tracker.currentGeneration, token)
+    }
+
+    func testGameSurfaceIdentityChecksForegroundAndMonitorCoordinates() {
+        let bounds = CGRect(x: -1920, y: -300, width: 1920, height: 1080).dictionaryRepresentation
+        let game: [String: Any] = [kCGWindowLayer as String: 0, kCGWindowOwnerPID as String: 77, kCGWindowNumber as String: 5, kCGWindowBounds as String: bounds]
+        XCTAssertNotNil(DesktopAccess.surfaceIdentity(at: CGPoint(x: -500, y: -100), windows: [game], pid: 77))
+        XCTAssertNil(DesktopAccess.surfaceIdentity(at: CGPoint(x: -500, y: -100), windows: [game], pid: 78))
+        XCTAssertNil(DesktopAccess.surfaceIdentity(at: CGPoint(x: 500, y: 100), windows: [game], pid: 77))
+        XCTAssertNil(DesktopAccess.surfaceIdentity(at: CGPoint(x: Double.nan, y: 100), windows: [game], pid: 77))
+    }
+
+
+    func testLinkedPanelPlacementAndMascotActivity() {
+        let screen = CGRect(x: -1920, y: -200, width: 1920, height: 1080)
+        for corner in PanelCorner.allCases {
+            for point in [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: -5, y: 7), CGPoint(x: CGFloat.nan, y: CGFloat.infinity)] {
+                let frame = corner.frame(size: CGSize(width: 320, height: 600), visible: screen, free: point, reservedHeight: 164)
+                XCTAssertTrue(screen.contains(frame))
+                XCTAssertLessThanOrEqual(frame.maxY + 164, screen.maxY)
+                let grown = corner.frame(size: CGSize(width: 320, height: 900), visible: screen, free: point, reservedHeight: 164)
+                XCTAssertLessThanOrEqual(grown.maxY + 164, screen.maxY)
+            }
+        }
+        var activity = MascotActivity(); activity.touch(10)
+        XCTAssertFalse(activity.shouldSleep(99)); XCTAssertTrue(activity.shouldSleep(100))
+        activity.speaking = true; XCTAssertFalse(activity.shouldSleep(200))
+        activity.speaking = false; activity.touch(200); XCTAssertFalse(activity.shouldSleep(201))
+        activity.manualSleep = true; XCTAssertFalse(activity.shouldSleep(300))
+        XCTAssertEqual(CommandParser.parse("une mascota al panel"), .mascot("join"))
+        XCTAssertEqual(CommandParser.parse("separa la mascota del panel"), .mascot("separate"))
+        XCTAssertEqual(CommandParser.parse("escribe une mascota al panel"), .dictate("une mascota al panel"))
+    }
+
+    func testMascotCommandsAndPlayback() throws {
+        XCTAssertEqual(CommandParser.parse("mascota Cu Chu"), .mascot("cuchu"))
+        XCTAssertEqual(CommandParser.parse("elige mascota tiiinku"), .mascot("tinku"))
+        XCTAssertEqual(CommandParser.parse("mascota Yaty"), .mascot("yati"))
+        XCTAssertEqual(CommandParser.parse("oculta la mascota"), .mascot("ninguna"))
+        XCTAssertEqual(CommandParser.parse("duerme mascota"), .mascot("sleep"))
+        XCTAssertEqual(CommandParser.parse("escribe mascota Cuchu"), .dictate("mascota Cuchu"))
+        XCTAssertEqual(CommandParser.parse("busca mascota Yati en Google"), .search("mascota Yati", "google", "actual"))
+        for name in ["tinku", "cuchu", "yati"] {
+            let url = try XCTUnwrap(Bundle.main.url(forResource: "mascota-" + name, withExtension: "json"))
+            let atlas = try JSONDecoder().decode(MascotAtlas.self, from: Data(contentsOf: url))
+            XCTAssertEqual(atlas.frames.count, 144)
+            XCTAssertTrue(atlas.animations.allSatisfy { ($0.entry + $0.loop + $0.exit).allSatisfy(atlas.frames.indices.contains) })
+            var animation = MascotPlayback(atlas: atlas)
+            animation.set("wave"); for _ in 0..<100 { animation.advance() }; XCTAssertEqual(animation.state, "idle")
+            animation.set("laptop"); for _ in 0..<100 { animation.advance() }; XCTAssertEqual(animation.state, "idle")
+            animation.set("sleep"); for _ in 0..<100 { animation.advance() }; XCTAssertEqual(animation.state, "sleep"); XCTAssertTrue(animation.resting)
+            animation.set("wake"); for _ in 0..<100 { animation.advance() }; XCTAssertEqual(animation.state, "idle")
+        }
+    }
+
+    func testLocalAttractionDoesNotArmClicksOrCatchFastMovement() {
+        let point = CGPoint(x: -100, y: 50)
+        let moved = cursorAttraction(point, center: CGPoint(x: -80, y: 50), speed: 0, dt: 0.02)
+        XCTAssertGreaterThan(moved.x, -100); XCTAssertLessThan(moved.x, -80)
+        XCTAssertEqual(cursorAttraction(point, center: CGPoint(x: -71, y: 50), speed: 0, dt: 0.02), point)
+        XCTAssertEqual(cursorAttraction(point, center: CGPoint(x: -80, y: 50), speed: 121, dt: 0.02), point)
+    }
+    func testGesturesFixedCenterAndLegacyModes() {
+        XCTAssertEqual(ControlModes.normalize("automatico"), "manos")
+        XCTAssertEqual(ControlModes.normalize("brazo_izquierdo"), "manos")
+        XCTAssertEqual(ControlModes.normalize("torso"), "cabeza")
+        for fps in [5.0, 15, 30, 60] {
+            var gesture = GestureState(), t = 0.0
+            let neutral = CGPoint(x: 0.2, y: 0.7)
+            XCTAssertEqual(gesture.update(neutral, time: t), CGPoint(x: 0.5, y: 0.5))
+            t += 1 / fps; XCTAssertGreaterThan(gesture.update(CGPoint(x: 0.23, y: 0.7), time: t).x, 0.65)
+            for _ in 0..<5 { t += 1 / fps; XCTAssertGreaterThan(gesture.update(CGPoint(x: 0.23, y: 0.7), time: t).x, 0.65) }
+            t += 1 / fps; XCTAssertEqual(gesture.update(neutral, time: t), CGPoint(x: 0.5, y: 0.5))
+            XCTAssertEqual(gesture.update(CGPoint(x: 0.9, y: 0.9), time: t), CGPoint(x: 0.5, y: 0.5))
+            t += 0.3; XCTAssertEqual(gesture.update(CGPoint(x: 0.9, y: 0.9), time: t), CGPoint(x: 0.5, y: 0.5)); XCTAssertTrue(gesture.resetNow)
+            var state = KineticState(); state.fixedCenter = true; state.calibrate()
+            XCTAssertNotNil(state.origin); XCTAssertFalse(state.update(CGPoint(x: 0.5, y: 0.5), time: 0, target: "button").click)
+            state.lost(at: 2); XCTAssertEqual(state.progress, 0)
+        }
+    }
+    func testLocalTextureRejectsLightingAndTracksAwayFromCenter() {
+        var zone = ZoneTracker()
+        let plain = [Float](repeating: 50, count: 19200)
+        XCTAssertNil(zone.update(plain, time: 0)); XCTAssertNil(zone.update([Float](repeating: 80, count: 19200), time: 0.1))
+        var seed: UInt32 = 160
+        let patch = (0..<900).map { _ -> Float in seed = 1664525 &* seed &+ 1013904223; return Float(20 + seed % 210) }
+        func picture(_ offset: Int) -> [Float] { var pixels = plain; for y in 0..<30 { for x in 0..<30 { pixels[(40 + y) * 160 + 30 + x + offset] = patch[y * 30 + x] } }; return pixels }
+        zone.reset(); XCTAssertNil(zone.update(picture(0), time: 0))
+        let tracked = zone.update(picture(2), time: 0.1); XCTAssertNotNil(tracked)
+        let next = zone.update(picture(4), time: 0.2); XCTAssertNotNil(next)
+        if let tracked, let next { XCTAssertEqual(next.x - tracked.x, 2.0 / 160, accuracy: 0.001) }
+        XCTAssertNil(zone.update(plain, time: 0.3)); XCTAssertNil(zone.update(plain, time: 1.6))
+    }
+
     func testPiPRemainsInItsCornerWhenResizedOnAnyDisplay() {
         for display in [CGRect(x: 0, y: 24, width: 1440, height: 850), CGRect(x: -1280, y: -500, width: 1280, height: 700), CGRect(x: 0, y: 0, width: 280, height: 500)] {
             for corner in PanelCorner.allCases {
@@ -296,4 +570,74 @@ final class Adapta_PETests: XCTestCase {
         }
     }
 
+    @MainActor func testOptionalAIEndpointChangeDownloadLimitAndRedirects() async {
+        let suite = "cc.adaptape.optional-ai-test." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OptionalAIStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        // Proveedor simulado: sin red ni claves reales.
+        var key = "", deletionAllowed = true
+        let ai = OptionalAI(defaults: defaults, session: session, readKey: { key }, deleteKey: {
+            guard deletionAllowed else { return false }
+            key = ""; return true
+        })
+        ai.endpoint = "https://ejemplo.test/v1/chat/completions"
+        ai.isEnabled = true; ai.model = "modelo-prueba"; key = "clave-falsa-de-prueba"; ai.allowScreenUpload = true
+        OptionalAIStubProtocol.reply = { _ in nil }
+        ai.ask("hola")
+        XCTAssertTrue(ai.isBusy)
+        // Cambiar de destino cancela la consulta, borra la clave y revoca el envío de pantalla.
+        ai.endpoint = "https://otro.test/v1/chat/completions"
+        XCTAssertTrue(key.isEmpty); XCTAssertFalse(ai.allowScreenUpload); XCTAssertFalse(ai.isBusy)
+        XCTAssertEqual(defaults.string(forKey: "AIEndpoint"), "https://otro.test/v1/chat/completions")
+        // Si el llavero no borra la clave, se conserva el destino anterior.
+        deletionAllowed = false; key = "clave-falsa-de-prueba"
+        ai.endpoint = "https://rechazado.test/v1/chat/completions"
+        XCTAssertEqual(ai.endpoint, "https://otro.test/v1/chat/completions")
+        XCTAssertEqual(defaults.string(forKey: "AIEndpoint"), ai.endpoint)
+        XCTAssertEqual(key, "clave-falsa-de-prueba"); XCTAssertTrue(ai.status.contains("conserva"))
+        // HTTP sólo en loopback real.
+        for valid in ["https://ejemplo.test/v1/chat/completions", "http://localhost:11434/v1/chat/completions",
+                      "http://127.12.34.56:8080/v1", "http://[::1]:8080/v1"] {
+            XCTAssertNotNil(OptionalAI.compatibleEndpoint(valid), valid)
+        }
+        for invalid in ["http://ejemplo.test/v1", "http://localhost.evil.com/v1", "http://127.0.0.1.evil.com/v1", "http://127.256.0.1/v1",
+                        "http://128.0.0.1/v1", "https://ejemplo.test/v1?key=x", "https://usuario:clave@ejemplo.test/v1", "ftp://localhost/v1"] {
+            XCTAssertNil(OptionalAI.compatibleEndpoint(invalid), invalid)
+        }
+        // El límite se aplica durante la descarga, aunque falte Content-Length.
+        let request = URLRequest(url: URL(string: "https://ejemplo.test/v1")!)
+        OptionalAIStubProtocol.reply = { _ in (200, Data(repeating: 97, count: OptionalAI.maxResponseBytes + 4_000)) }
+        if case .failure(let error) = await OptionalAI.fetch(request, session: session) {
+            XCTAssertEqual((error as? URLError)?.code, .dataLengthExceedsMaximum)
+        } else { XCTFail("Una respuesta mayor de 64 KiB debe rechazarse") }
+        OptionalAIStubProtocol.reply = { _ in (200, Data("{}".utf8)) }
+        if case .success(let (data, http)) = await OptionalAI.fetch(request, session: session) {
+            XCTAssertEqual(data, Data("{}".utf8)); XCTAssertEqual(http.statusCode, 200)
+        } else { XCTFail("Una respuesta pequeña debe llegar completa") }
+        // La política nunca sigue redirecciones.
+        let redirect = URL(string: "http://otro.test/v1")!
+        var followed: URLRequest? = URLRequest(url: redirect)
+        OptionalAIRedirectPolicy().urlSession(session, task: session.dataTask(with: redirect),
+            willPerformHTTPRedirection: HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: nil, headerFields: nil)!,
+            newRequest: URLRequest(url: redirect)) { followed = $0 }
+        XCTAssertNil(followed)
+        OptionalAIStubProtocol.reply = nil
+    }
+}
+
+/// Proveedor simulado para OptionalAI: responde sin red; `nil` deja la petición en vuelo.
+final class OptionalAIStubProtocol: URLProtocol {
+    nonisolated(unsafe) static var reply: ((URLRequest) -> (Int, Data)?)?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let (code, data) = Self.reply?(request) else { return }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

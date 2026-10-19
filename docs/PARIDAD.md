@@ -18,8 +18,8 @@ La aplicación Swift funciona de forma independiente. No modifica las extensione
 | Pestañas, ventanas, historial, zoom y scroll | Atajos nativos y automatización del navegador activo | Atajos dependen del navegador y la distribución de teclado; no se inyecta JS en páginas. |
 | Seleccionar, resaltar, enfocar y pulsar controles por nombre | Árbol AX de la ventana activa, foco, `AXPress`, contorno transparente | Una app que no expone semántica AX requiere cursor o VoiceOver. El recorrido está limitado a 1.800 nodos/0,8 s. |
 | Reproducción y pausa | Activación del control accesible por nombre | No se garantiza para reproductores que no expongan controles; no se manda espacio indiscriminadamente a formularios. |
-| Mano, rostro, torso, brazos y modo automático | Vision: palma, rostro con nariz/giro, hombros y articulaciones visibles; fuente mantenida | Los modelos de Apple y MediaPipe no producen coordenadas idénticas. No se afirma detección universal con amputaciones. |
-| Zona libre sin anatomía | Saliencia local y seguimiento de objeto de Vision | Selección automática de textura/objeto; una oclusión o poco contraste puede exigir recalibrar. No equivale píxel por píxel al correlador JS. |
+| Cabeza/torso, manos/brazos/puños y textura; alias antiguos migrados | Vision: muñeca, rostro con nariz/giro y respaldo corporal; manos excluye hombros | Los modelos de Apple y MediaPipe no producen coordenadas idénticas. No se afirma detección universal con amputaciones. |
+| Zona libre sin anatomía | Movimiento local, parche normalizado y correlación con pequeños giros a 160×120 | Comparte el criterio del correlador web. La cámara/plataforma no producen imágenes idénticas; una oclusión larga exige adquirir otro detalle. |
 | Calibración, mediana, suavizado por tiempo, temblor y movimientos pequeños | `KineticState`, ventana de 1,2 s, estabilidad >=900 ms y >=4 muestras, mediana de tres, EMA por tiempo | Se conservan mecánicas y tiempos; las velocidades requieren ajuste personal con cámara y monitores reales. |
 | Clic por permanencia y clic derecho siguiente | Armado tras >=180 ms fuera del anillo; clic al volver y mantener el mismo objetivo durante el tiempo elegido | Un clic por entrada. Calibración, pérdida, pausas y saltos de tiempo desarman. El objetivo usa identidad AX; no es un nodo DOM. |
 | Menú contextual del sitio / menú propio | Clic derecho nativo del sistema | El menú lo proporciona la aplicación activa; no se copia el menú HTML de la extensión. |
@@ -32,7 +32,7 @@ La aplicación Swift funciona de forma independiente. No modifica las extensione
 ## Correcciones de la base Swift anterior
 
 - Se elimina el conteo de frames que producía clics repetidos y velocidades diferentes según cámara.
-- Se calibra la postura real; el centro visual y la referencia de control ya no se confunden.
+- Sólo cabeza/torso calibra la postura real. Extremidades usan centro fijo y reposo del gesto inicial.
 - Sesiones y peticiones se serializan; stop/restart no agrega salidas de cámara duplicadas.
 - Un token evita reactivar módulos después de una respuesta tardía de permisos.
 - Se conservan comandos finales antes del reinicio y el texto original antes de normalizar intenciones.
@@ -58,7 +58,7 @@ Las pruebas automatizadas cubren parser, catálogo, activación, Unicode, estabi
 Compilar con el SDK instalado y mínimo 14.0 comprueba disponibilidad declarada de APIs. No prueba ejecución en cada macOS. Se debe ejecutar la lista siguiente en Sonoma 14 y en las versiones posteriores que se quieran distribuir, incluyendo macOS 27, con cámara/micrófono reales y firma definitiva:
 
 1. Denegar permisos, reactivar y detener mientras el diálogo de autorización está abierto.
-2. Probar cabeza, mano, torso, brazos y zona libre; calibrar sentado en postura cómoda y verificar pérdida/recuperación.
+2. Probar los tres modos; cabeza calibra sentado en postura cómoda, manos/textura requieren gesto breve. Verificar pérdida/recuperación, pausa, pantalla completa y varios monitores.
 3. Mover ratón físico durante seguimiento: no debe luchar con el cursor ni provocar clics.
 4. Probar dwell, clic derecho, salida del anillo y ausencia de clic repetido al descansar.
 5. Reconocer comandos repetidos tras varios reinicios, dictado con acentos y interrupción de TTS y retorno a escucha.
@@ -92,6 +92,26 @@ Los resultados ambiguos y los campos disponibles ofrecen páginas de seis opcion
 
 ### Anclaje de PiP
 
-El panel ya no usa arrastre ni autosave de coordenadas libres. Guarda una de cuatro esquinas y el identificador del monitor; calcula su marco sobre visibleFrame con 16 puntos de margen. Los cambios de tamaño conservan la misma esquina y los cambios de pantallas recalculan el marco. Si el monitor recordado se desconecta, usa la pantalla principal disponible y conserva la preferencia. Una regresión prueba las cuatro esquinas, tres alturas y pantallas con origen negativo o tamaño menor que el panel. Se retiran los interruptores redundantes del PiP y se mantienen en Ajustes/barra de menú.
+PiP admite anclaje y arrastre libre desde su título, por ratón o flechas. Guarda monitor y posición relativa; elegir esquina restablece el anclaje. Al unir la mascota, reserva 164 puntos encima y ambos se mueven juntos. Separar conserva la posición propia de la mascota. El marco se recalcula al cambiar contenido o pantallas; la regresión cubre coordenadas negativas, valores no finitos, límites y crecimiento. Voz/Cursor se activan desde PiP; Opciones reúne mascota, filtros y vista de cámara. El contenido usa fondo sólido para mantener contraste con la app inactiva; Liquid Glass se limita al botón Ajustes en macOS 26, con estilo nativo sencillo en versiones anteriores o transparencia reducida.
 
 La comprobación nativa mostró elecciones de menús y campos, cancelación explícita y caducidad. No sustituye una sesión controlada de dictado por voz y ejecución de acciones en todas las aplicaciones; los árboles AX y el soporte de cada aplicación siguen delimitando lo disponible.
+
+## Actualización del 11 de octubre de 2026
+
+Se añaden mascotas opcionales, gestos con centro fijo, correlación local de textura, atracción acotada y destino por ventana/celda para superficies sin controles AX. El clic vuelve a verificar el destino actual. Filtros, resaltados y mascota admiten Spaces de otras apps; no eluden contenido protegido ni presentación exclusiva. Véase la sección de mejoras del README para recursos, controles y límites de comprobación. Lite se mantiene en su repositorio independiente.
+
+### Interfaz y actividad · 11 de octubre de 2026
+
+La actividad real de comandos/TTS gobierna teléfono, laptop, lectura y habla; los estados breves terminan en reposo. Inactividad de 90 segundos programa un descanso sin sondeo continuo. Dormir manual permanece hasta despertar; TTS impide el descanso automático. Se conservan preferencias avanzadas y Lite independiente. Regresiones nuevas prueban unión/separación por parser, dictado intacto, descanso, actividad de voz y retorno de laptop al reposo. Pruebas rápidas y revisión de controles nativos no miden dispositivos, FPS ni presentación exclusiva de juegos.
+
+### Comandos y robustez · 17 de octubre de 2026
+
+Port español de preparación de comandos en Base y Lite: cortesía repetida, formas conjugadas, idempotencia y conservación del dictado. Los tests incluyen puntuación tras muletillas, nombres terminados en PE, consultas con pues y buscar campos sin navegación accidental. Las partículas ambiguas finales requieren coma, a diferencia del comportamiento de la extensión. Se conservan los atajos nativos y el despachador de filtros usa la misma preparación.
+
+Base descarta orientaciones no finitas y normaliza ángulos extremos antes de integrar el giro, evitando bucles de duración no acotada. No se modifican umbrales, precisión del detector, modelos ni reglas de clic. Cinco tests nativos de Base y dos de Lite se ejecutaron sobre datos sintéticos. El proyecto Base original bloqueó Xcode en NSFileCoordinator; las mismas fuentes se verificaron desde una copia temporal. No se acreditan cámara/micrófono reales, Intel, poca luz ni rendimiento en equipos de nivel bajo. Seis idiomas y el resto de gestos permanecen pendientes.
+El segundo bloque añade alias españoles de activación, cortesía sola, vencimiento exacto de ocho segundos y preservación del sufijo. En Base se comprobaron cinco tests de voz, incluidos transcripciones completas, ciclos repetidos y rechazo del eco; uno ya formaba parte de los cinco tests del primer bloque. Son nueve tests distintos de Base y tres de Lite entre ambos bloques. No se modificaron reconocedores ni se validó ASR real.
+
+
+## Presentación del filtro: 17 de octubre de 2026
+
+Probado con imagen sintética: la ventana permanece oculta antes del primer cuadro, se presenta una vez y no vuelve a mostrarse con una entrega tardía después de invalidar. FilterPresentationTests.testFirstImageAndCancellation aprobado en copia actual de las fuentes de Base. El mismo código se utiliza en Lite y Pro/Deluxe. Grabación de pantalla, multimonitor, contenido protegido y latencia real siguen pendientes de prueba física.

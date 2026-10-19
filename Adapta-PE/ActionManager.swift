@@ -17,6 +17,7 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     var showFeedback: (() -> Void)?
     let synthesizer = AVSpeechSynthesizer()
     var kineticAction: ((String) -> Void)?
+    var speechReading: ((Bool) -> Void)?
     var speechOutput: ((Bool) -> Void)?
     var appAction: ((String) -> Void)?
     private let scriptQueue = DispatchQueue(label: "pe.adapta.scripts", qos: .userInitiated)
@@ -98,13 +99,19 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
     func procesarIntencion(_ text: String) {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.procesarIntencion(text) }; return }
+        let text = CommandParser.prepare(text)
         let normalized = CommandParser.normalize(text)
+        let stop = normalized.replacingOccurrences(of: #"[\s,]+(?:ya pe|ya pues|pe|pues)$"#, with: "", options: .regularExpression)
+        if ["detener todo", "deten todo", "apaga todo", "para todo", "para", "parar", "stop"].contains(stop) { appAction?("detener todo"); return }
+        if ["desactiva voz", "apaga el microfono", "desactiva el microfono"].contains(stop) {
+            callar(); appAction?("desactivar voz"); return
+        }
         if let corner = CommandParser.tail("^(?:(?:mueve|coloca|pon) (?:el )?(?:panel|pip) (?:a|en) (?:la )?esquina|panel (?:en (?:la )?)?esquina)\\s+", in: text), PanelCorner.allCases.contains(where: { CommandParser.normalize($0.title) == CommandParser.normalize(corner) }) {
             appAction?("esquina:" + CommandParser.normalize(corner)); return
         }
         if ["mostrar ajustes", "abrir adapta", "mostrar adapta", "modo flotante", "ocultar adapta", "detener todo", "activar talkback", "desactivar talkback"].contains(normalized) { appAction?(normalized); return }
         if let filter = CommandParser.tail("^(?:filtro|activar filtro)\\s+", in: text) { appAction?("filtro:" + CommandParser.normalize(filter)); return }
-        if ["quitar filtro", "desactivar filtro"].contains(normalized) { appAction?("filtro:ninguno"); return }
+        if ["quitar filtro", "quita filtro", "desactivar filtro"].contains(normalized) { appAction?("filtro:ninguno"); return }
         if let question = CommandParser.tail("^(?:pregunta a la ia|consulta a la ia)\\s+", in: text) { OptionalAI.shared.ask(question); return }
         if normalized == "analiza pantalla con ia" { OptionalAI.shared.analyzeScreen(); return }
         let command = CommandParser.parse(text)
@@ -117,7 +124,9 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         if command != .silence {
             if case .choose = command {} else { cancelPendingActions(); DesktopAccess.shared.cancelPendingWork() }
         }
+        speechReading?(command == .readScreen || { if case .readElement = command { return true }; return false }())
         switch command {
+        case .mascot(let value): appAction?("mascota:" + value)
         case .choose(let answer): choose(answer)
         case .appShortcut(let name, let action): openApp(name, monitor: nil, afterOpen: action)
         case .keyChord(let text):

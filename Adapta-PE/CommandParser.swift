@@ -4,7 +4,7 @@ import CoreGraphics
 enum VoiceCommand: Equatable {
     case dictate(String), clearText, select(String), focus(String), press(String), pressSelection, readElement(String)
     case open(String, String), search(String, String?, String), closeApp(String), shortcut(String)
-    case kinetic(String), readScreen, silence, cancel, unknown(String)
+    case mascot(String), kinetic(String), readScreen, silence, cancel, unknown(String)
     case appShortcut(String, String), keyChord(String), menu(String), listActions, listFields, writeField(String, String), selectText(String), choose(String)
 }
 
@@ -20,13 +20,104 @@ struct CommandParser {
         return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // Reglas españolas de la extensión; sólo se reescribe el prefijo, nunca el dictado.
+    static func prepare(_ text: String) -> String {
+        var original = String(text.trimmingCharacters(in: .whitespacesAndNewlines).drop(while: { $0.isWhitespace || "¿¡,.;:".contains($0) }))
+        // La coma temporal permite retirar también una cortesía sin orden.
+        original += ","
+        while let range = original.range(of: preparationWrapper, options: [.regularExpression, .caseInsensitive]) {
+            original.removeSubrange(range)
+        }
+        if original.hasSuffix(",") { original.removeLast() }
+        let rewritten = canonicalPrefix(original)
+        if rewritten.range(of: #"^(?:escribe|dicta|introduce|ingresa texto|teclea|tipea|(?:pregunta|consulta)\s+a\s+la\s+ia|(?:selecciona|resalta)\s+(?:el\s+)?texto)\s+"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return rewritten
+        }
+        let ending = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,;:!?"))
+        original = original.trimmingCharacters(in: ending)
+        while let range = original.range(of: #"(?:[\s,]+(?:por favor|porfa|porfis)|,\s*(?:ya pe|ya pues|pe|pues))$"#, options: [.regularExpression, .caseInsensitive]) {
+            original = String(original[..<range.lowerBound]).trimmingCharacters(in: ending)
+        }
+        if shortcuts[normalize(original)] != nil || kineticCommands[normalize(original)] != nil { return original }
+        return canonicalPrefix(original)
+    }
+
+    private static func canonicalPrefix(_ text: String) -> String {
+        guard let word = text.range(of: #"^[\p{L}\p{M}]+"#, options: .regularExpression),
+              let verb = preparationVerbs[normalize(String(text[word]))] else { return text }
+        return verb + text[word.upperBound...]
+    }
+
+    private static let preparationWrapper = #"^(?:oye|oe|oiga|hey|ey|eh|ya pues|ya pe|ya|ok|okey|okay|vale|bueno|a ver|mira|este|ahora|ahorita|entonces|y|porfa|porfis|por favor|favor de|me haces el favor de|hazme el favor de|me har[ií]as el favor de|h[aá]game el favor de|me hace el favor de|ay[uú]dame a|ay[uú]deme a|me ayudas a|quiero que|necesito que|quisiera que|me puedes|me podr[ií]as|me puede|me podr[ií]a|puedes|podr[ií]as|puede|podr[ií]a|pod[eé]s|quiero|quisiera|necesito|me gustar[ií]a|intenta|trata de|me|(?:vamos|voy) a(?= \S+(?:ar|er|ir)\b))[\s,¿¡]+"#
+    private static let preparationVerbs: [String: String] = {
+        let groups: [(String, String)] = [
+            ("abre", "abra abras abri abrir abres abreme abrime abrame abrirme"),
+            ("busca", "busque busques buscar buscas buscame busqueme buscarme"),
+            ("escribe", "escriba escribas escribi escribir escribes escribeme escribime"),
+            ("dicta", "dicte dictes dictar"),
+            ("cierra", "cierre cierres cerra cerrar cierras cierrame cerrame"),
+            ("baja", "baje bajes bajar bajas bajale"),
+            ("sube", "suba subas subi subir subes subele"),
+            ("vuelve", "vuelva vuelvas volve volver vuelves"),
+            ("regresa", "regrese regreses regresar regresas"),
+            ("retrocede", "retroceda retrocedas"),
+            ("avanza", "avance avances avanzar avanzas"),
+            ("recarga", "recargue recargues recargar recargas"),
+            ("actualiza", "actualice actualices"),
+            ("refresca", "refresque refresques"),
+            ("selecciona", "seleccione selecciones seleccionar seleccionas seleccioname"),
+            ("resalta", "resalte resaltes resaltar"),
+            ("pulsa", "pulse pulses pulsar pulsas toca toque toques tocar clickea cliquea clica clickear cliquear clique"),
+            ("presiona", "presione presiones presionar presionas aprieta apriete aprietes apreta apretar aplasta aplaste aplastes aplastar"),
+            ("enfoca", "enfoque enfoques enfocar"),
+            ("reproduce", "reproduzca reproduzcas reproducir"),
+            ("pausa", "pause pauses"),
+            ("haz", "haga hagas hace hacer haces"),
+            ("hazle", "hagale hacele"),
+            ("dale", "dele"),
+            ("cancela", "cancele canceles"),
+            ("borra", "borre borres borrar borras"),
+            ("limpia", "limpie limpies limpiar"),
+            ("acerca", "acerque"),
+            ("aleja", "aleje"),
+            ("amplia", "amplie ampliar"),
+            ("agranda", "agrande agrandar"),
+            ("achica", "achique achicar"),
+            ("aumenta", "aumente"),
+            ("reduce", "reduzca"),
+            ("ve", "vaya vayas anda"),
+            ("entra", "entre entres entrar"),
+            ("ingresa", "ingrese"),
+            ("visita", "visite"),
+            ("inicia", "inicie"),
+            ("ejecuta", "ejecute"),
+            ("duplica", "duplique dupliques duplicar"),
+            ("silencia", "silencie silencies silenciar mutea mutee mutees mutear"),
+            ("calla", "callate callese"),
+            ("activa", "active actives"),
+            ("desactiva", "desactive"),
+            ("apaga", "apague apagues apagar"),
+            ("enciende", "encienda"),
+            ("prende", "prenda"),
+            ("quita", "quite quites quitar"),
+            ("cambia", "cambie cambies cambiar"),
+            ("pasa", "pase pases pasar"),
+            ("googlea", "googlee"),
+            ("envia", "envie envies"),
+            ("manda", "mande mandes")
+        ]
+        return Dictionary(uniqueKeysWithValues: groups.flatMap { verb, forms in
+            forms.split(separator: " ").map { (String($0), verb) }
+        })
+    }()
+
     static func parse(_ text: String) -> VoiceCommand {
-        var original = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let clean = tail("^(?:por favor[, ]+|puedes\\s+|podrías\\s+)", in: original) { original = clean }
+        var original = prepare(text)
         let clean = original.replacingOccurrences(of: "[.!?]+$", with: "", options: .regularExpression)
         let normalized = normalize(clean)
+        if let command = MascotCommand.parse(normalized) { return .mascot(command) }
         if ["que puedo hacer", "mostrar comandos", "muestra comandos", "listar acciones", "muestra acciones", "acciones disponibles"].contains(normalized) { return .listActions }
-        if ["muestra campos", "mostrar campos", "buscar campos", "busca campos de texto", "campos de texto", "donde puedo escribir"].contains(normalized) { return .listFields }
+        if ["muestra campos", "mostrar campos", "buscar campos", "busca campos", "busca campos de texto", "campos de texto", "donde puedo escribir"].contains(normalized) { return .listFields }
         if let value = tail("^(?:elige|elijo|elegir|opción|opcion|número|numero)\\s+", in: clean) { return .choose(value) }
         if let value = tail("^(?:selecciona|seleccionar)\\s+", in: clean), ChoicePrompt.ordinal(value) != nil { return .choose(value) }
         if ChoicePrompt.ordinal(normalized) != nil { return .choose(normalized) }
@@ -46,7 +137,7 @@ struct CommandParser {
         original = original.replacingOccurrences(of: "[, ]+por favor[.!?]*$|[.!?]+$", with: "", options: [.regularExpression, .caseInsensitive])
         let cmd = normalize(original)
         if ["cancelar", "cancela", "olvidalo", "no hagas nada", "cancelar seleccion", "quita la seleccion"].contains(cmd) { return .cancel }
-        if ["callar", "silencio", "deja de leer", "deja de hablar"].contains(cmd) { return .silence }
+        if ["callar", "silencio", "deja de leer", "deja de hablar", "para la lectura"].contains(cmd) { return .silence }
         if ["lee la pantalla", "leer pantalla", "leer la pantalla", "lee pantalla", "leer ventana", "lee la ventana", "ojo bionico"].contains(cmd) { return .readScreen }
         if let target = tail("^(?:lee|leer|léeme)\\s+", in: original) { return .readElement(controlName(target)) }
         if let target = tail("^(?:selecciona(?:r)?|resalta(?:r)?|marca(?:r)?)\\s+", in: original) { return .select(controlName(target)) }

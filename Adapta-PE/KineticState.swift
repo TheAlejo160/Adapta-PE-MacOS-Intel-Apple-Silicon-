@@ -3,11 +3,13 @@ import Foundation
 
 // Física independiente de la cámara: tiempo monotónico, sin temporizadores por fotograma.
 struct KineticState {
+    var fixedCenter = false
     var tremor = false
     var sensitivity: Double = 1
     var amplitude: Double = 1
     var dwellDuration: Double = 1
     var dwellEnabled = true
+    private(set) var velocity = CGPoint.zero
     private(set) var origin: CGPoint?
     private(set) var smooth = CGPoint(x: 0.5, y: 0.5)
     private(set) var progress: Double = 0
@@ -25,10 +27,13 @@ struct KineticState {
 
     mutating func cancelClick() { armSince = nil; dwellSince = nil; armed = false; progress = 0; targetID = nil; safe = false }
     mutating func calibrate() {
-        origin = nil; samples.removeAll(keepingCapacity: true); history.removeAll(keepingCapacity: true)
+        velocity = .zero
+        origin = fixedCenter ? CGPoint(x: 0.5, y: 0.5) : nil; samples.removeAll(keepingCapacity: true); history.removeAll(keepingCapacity: true)
+        if fixedCenter { history = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.5)] }
         lastTime = nil; smooth = CGPoint(x: 0.5, y: 0.5); cancelClick()
     }
     mutating func lost(at time: Double) {
+        velocity = .zero
         cancelClick()
         samples.removeAll(keepingCapacity: true)
         if let lastTime, time - lastTime >= 1.2 { calibrate() }
@@ -36,11 +41,11 @@ struct KineticState {
     private func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
 
     mutating func update(_ point: CGPoint, time: Double, aspect: Double = 0.75, target: String?) -> (delta: CGPoint, click: Bool) {
-        calibratedNow = false
+        velocity = .zero; calibratedNow = false
         guard point.x.isFinite, point.y.isFinite, time.isFinite else { lost(at: time); return (.zero, false) }
         let interval = lastTime.map { time - $0 } ?? 0
         if interval > 1.2 { calibrate() }
-        if interval < 0 || interval > 0.5 { cancelClick(); history.removeAll(keepingCapacity: true) }
+        if interval < 0 || interval > 0.2 { cancelClick(); history.removeAll(keepingCapacity: true) }
         lastTime = time
         if origin == nil {
             samples.append((time, point)); samples.removeAll { time - $0.0 > 1.2 }
@@ -57,12 +62,12 @@ struct KineticState {
         guard let origin else { return (.zero, false) }
         history.append(point); if history.count > 3 { history.removeFirst() }
         guard history.count == 3 else { return (.zero, false) }
-        let filtered = CGPoint(x: median(history.map { Double($0.x) }), y: median(history.map { Double($0.y) }))
+        let filtered = tremor ? CGPoint(x: median(history.map { Double($0.x) }), y: median(history.map { Double($0.y) })) : point
         let rawX = (filtered.x - origin.x) / amplitude
         let rawY = (filtered.y - origin.y) * aspect / amplitude
         let rawDistance = hypot(rawX, rawY)
-        let dt = min(max(interval, 0), 0.1)
-        let alpha = 1 - exp(-dt / (tremor ? 0.24 : rawDistance > attractionRadius + 0.025 ? 0.085 : 0.18))
+        let dt = min(max(interval, 0), 0.25)
+        let alpha = 1 - exp(-dt / (tremor ? 0.18 : rawDistance > attractionRadius + 0.025 ? 0.05 : 0.10))
         smooth.x += (0.5 + rawX - smooth.x) * alpha
         smooth.y += (0.5 + rawY - smooth.y) * alpha
         let dx = smooth.x - 0.5, dy = smooth.y - 0.5
@@ -82,10 +87,12 @@ struct KineticState {
             if armSince == nil { armSince = time }
             if time - (armSince ?? time) >= 0.18 { armed = true }
         } else { armSince = nil }
-        guard distance > 0 else { return (.zero, false) }
+        guard distance > 0, hypot((point.x - origin.x) / amplitude, (point.y - origin.y) * aspect / amplitude) > deadRadius else { return (.zero, false) }
         let advance = max(0, distance - deadRadius)
         let speed = distance <= attractionRadius ? 24 * pow(advance / (attractionRadius - deadRadius), 2) : min(480, 24 + pow((distance - attractionRadius) * 6, 1.6) * 160)
-        let step = min(tremor ? 240 : 600, speed * sensitivity) * dt
+        let rate = min(tremor ? 240 : 600, speed * sensitivity)
+        velocity = CGPoint(x: dx / distance * rate, y: dy / distance * rate)
+        let step = rate * dt
         return (CGPoint(x: dx / distance * step, y: dy / distance * step), false)
     }
 }

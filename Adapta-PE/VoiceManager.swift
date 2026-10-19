@@ -62,25 +62,37 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
     }
     deinit { if let activity = listeningActivity { ProcessInfo.processInfo.endActivity(activity) }; if let appObserver { NSWorkspace.shared.notificationCenter.removeObserver(appObserver) }; if let runtimeObserver { NotificationCenter.default.removeObserver(runtimeObserver) } }
+    nonisolated static func validatedMicID(_ selected: String, available: [String]) -> String {
+        selected.isEmpty || available.contains(selected) ? selected : ""
+    }
     func fetchMics() {
         availableMics = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
-        if !availableMics.contains(where: { $0.uniqueID == selectedMicID }), let first = availableMics.first { selectedMicID = first.uniqueID }
+        let selection = Self.validatedMicID(selectedMicID, available: availableMics.map(\.uniqueID))
+        if selection != selectedMicID { selectedMicID = selection }
     }
+    var solicitarMicrofono: (@escaping @Sendable (Bool) -> Void) -> Void = { AVCaptureDevice.requestAccess(for: .audio, completionHandler: $0) }
+    var solicitarReconocimiento: (@escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void = { SFSpeechRecognizer.requestAuthorization($0) }
     func startListening() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.startListening() }; return }
         guard !isListening, !isStarting else { return }
         generation += 1; let token = generation; isStarting = true; status = "Solicitando micrófono…"
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] allowed in
-            guard allowed else { DispatchQueue.main.async { guard let self, self.generation == token else { return }; self.isStarting = false; self.status = "Micrófono sin permiso" }; return }
-            SFSpeechRecognizer.requestAuthorization { authorization in
-                DispatchQueue.main.async {
-                    guard let self, self.generation == token, self.isStarting else { return }
-                    guard authorization == .authorized else { self.isStarting = false; self.status = "Reconocimiento de voz sin permiso"; return }
-                    let local = ["es-PE", "es-ES", "es-MX"].compactMap { SFSpeechRecognizer(locale: Locale(identifier: $0)) }.first { $0.supportsOnDeviceRecognition && $0.isAvailable }
-                    self.recognizer = local ?? (self.allowAppleNetwork ? SFSpeechRecognizer(locale: Locale(identifier: "es-PE")) : nil)
-                    guard self.recognizer != nil else { self.isStarting = false; self.status = "Español local no disponible. Instala recursos de dictado o autoriza reconocimiento de Apple por red."; return }
-                    self.setupHardware(token: token)
-                }
+        let recibirMicrofono: @MainActor @Sendable (Bool) -> Void = { [weak self] allowed in
+            guard let self, self.generation == token, self.isStarting else { return }
+            guard allowed else { self.isStarting = false; self.status = "Micrófono sin permiso"; return }
+            let recibirReconocimiento: @MainActor @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void = { [weak self] authorization in
+                guard let self, self.generation == token, self.isStarting else { return }
+                guard authorization == .authorized else { self.isStarting = false; self.status = "Reconocimiento de voz sin permiso"; return }
+                let local = ["es-PE", "es-ES", "es-MX"].compactMap { SFSpeechRecognizer(locale: Locale(identifier: $0)) }.first { $0.supportsOnDeviceRecognition && $0.isAvailable }
+                self.recognizer = local ?? (self.allowAppleNetwork ? SFSpeechRecognizer(locale: Locale(identifier: "es-PE")) : nil)
+                guard self.recognizer != nil else { self.isStarting = false; self.status = "Español local no disponible. Instala recursos de dictado o autoriza reconocimiento de Apple por red."; return }
+                self.setupHardware(token: token)
             }
+            self.solicitarReconocimiento { authorization in
+                DispatchQueue.main.async { recibirReconocimiento(authorization) }
+            }
+        }
+        solicitarMicrofono { allowed in
+            DispatchQueue.main.async { recibirMicrofono(allowed) }
         }
     }
     private func setupHardware(token: Int) {
@@ -88,7 +100,7 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         audioQueue.async {
             self.captureSession.beginConfiguration(); self.captureSession.inputs.forEach { self.captureSession.removeInput($0) }
             do {
-                guard let device = AVCaptureDevice(uniqueID: id) ?? AVCaptureDevice.default(for: .audio) else { throw CaptureFailure.missingDevice }
+                guard let device = (id.isEmpty ? AVCaptureDevice.default(for: .audio) : AVCaptureDevice(uniqueID: id)) else { throw CaptureFailure.missingDevice }
                 let input = try AVCaptureDeviceInput(device: device)
                 guard self.captureSession.canAddInput(input) else { throw CaptureFailure.missingDevice }; self.captureSession.addInput(input)
                 if self.captureSession.outputs.isEmpty {
@@ -175,7 +187,8 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     }
     private static func isWakeOnly(_ text: String) -> Bool {
         let word = UserDefaults.standard.string(forKey: "WakeWord") ?? "computadora"
-        return NameMatch.key(text) == NameMatch.key(word.isEmpty ? "computadora" : word)
+        var wake = WakePhraseState()
+        return wake.consume(text, wakeWord: word, time: 0).beep
     }
     private var waiting: Bool { ProcessInfo.processInfo.systemUptime < input.waitingUntil }
     private func consume() {

@@ -28,22 +28,70 @@ struct APIKeyStore {
 }
 
 final class OptionalAI: ObservableObject {
-    static let shared = OptionalAI()
-    @Published var isEnabled = UserDefaults.standard.bool(forKey: "AIEnabled") { didSet { UserDefaults.standard.set(isEnabled, forKey: "AIEnabled"); if !isEnabled { cancel() } } }
-    @Published var endpoint = UserDefaults.standard.string(forKey: "AIEndpoint") ?? "https://integrate.api.nvidia.com/v1/chat/completions" { didSet { UserDefaults.standard.set(endpoint, forKey: "AIEndpoint"); cancel() } }
-    @Published var model = UserDefaults.standard.string(forKey: "AIModel") ?? "" { didSet { UserDefaults.standard.set(model, forKey: "AIModel"); cancel() } }
+    static let shared: OptionalAI = { APIKeyStore.migrateLegacyKey(); return OptionalAI() }()
+    static let maxResponseBytes = 65_536
+    @Published var isEnabled: Bool { didSet { defaults.set(isEnabled, forKey: "AIEnabled"); if !isEnabled { cancel() } } }
+    var endpoint: String {
+        get { savedEndpoint }
+        set {
+            guard newValue != savedEndpoint else { return }
+            cancel()
+            // Una clave y el permiso de pantalla del servidor anterior nunca se trasladan a otro destino.
+            guard deleteKey() else { status = "No se pudo borrar la clave anterior; se conserva el endpoint."; return }
+            allowScreenUpload = false
+            savedEndpoint = newValue; defaults.set(newValue, forKey: "AIEndpoint")
+            status = "Endpoint cambiado. Guarda su clave y autoriza el envío de pantalla de nuevo."
+        }
+    }
+    @Published private var savedEndpoint: String
+    @Published var model: String { didSet { defaults.set(model, forKey: "AIModel"); cancel() } }
     @Published var allowScreenUpload = false { didSet { if !allowScreenUpload { cancel() } } }
     @Published private(set) var isBusy = false
     @Published private(set) var status = "IA apagada. Los comandos funcionan sin API key."
-    private var task: URLSessionDataTask?
+    private var task: Task<Void, Never>?
     private var generation = 0
-    private init() { APIKeyStore.migrateLegacyKey() }
+    private let defaults: UserDefaults
+    private let session: URLSession
+    private let readKey: () -> String
+    private let deleteKey: () -> Bool
+
+    init(defaults: UserDefaults = .standard, session: URLSession = OptionalAI.makeSession(),
+         readKey: @escaping () -> String = APIKeyStore.read, deleteKey: @escaping () -> Bool = { APIKeyStore.save("") == errSecSuccess }) {
+        self.defaults = defaults; self.session = session; self.readKey = readKey; self.deleteKey = deleteKey
+        isEnabled = defaults.bool(forKey: "AIEnabled")
+        savedEndpoint = defaults.string(forKey: "AIEndpoint") ?? "https://integrate.api.nvidia.com/v1/chat/completions"
+        model = defaults.string(forKey: "AIModel") ?? ""
+    }
+
+    static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 30
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        return URLSession(configuration: configuration)
+    }
+
+    /// HTTPS obligatorio; HTTP sólo en loopback real (localhost, 127.0.0.0/8, ::1). Sin credenciales, consulta ni fragmento.
+    static func compatibleEndpoint(_ text: String) -> URL? {
+        guard let components = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.user == nil, components.password == nil, components.query == nil, components.fragment == nil else { return nil }
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        let ipv4Loopback = octets.count == 4 && octets.first == "127" && octets.allSatisfy {
+            !$0.isEmpty && $0.utf8.allSatisfy { (48...57).contains($0) } && UInt8($0) != nil
+        }
+        let loopback = ["localhost", "::1", "[::1]"].contains(host) || ipv4Loopback
+        guard components.scheme == "https" || (components.scheme == "http" && loopback) else { return nil }
+        return components.url
+    }
+
     func cancel() { generation += 1; task?.cancel(); task = nil; if isBusy { status = "Consulta cancelada" }; isBusy = false }
     func ask(_ text: String) { send(content: text) }
     private func validate() -> (URL, String)? {
         guard isEnabled else { ActionManager.shared.hablar("La IA opcional está desactivada"); return nil }
-        guard let url = URL(string: endpoint), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil else { ActionManager.shared.hablar("Configura un endpoint HTTPS válido"); return nil }
-        let key = APIKeyStore.read()
+        guard let url = Self.compatibleEndpoint(endpoint) else { ActionManager.shared.hablar("Configura un endpoint HTTPS válido"); return nil }
+        let key = readKey()
         guard !key.isEmpty, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { ActionManager.shared.hablar("Guarda tu API key y el modelo del proveedor en Ajustes"); return nil }
         return (url, key)
     }
@@ -55,23 +103,51 @@ final class OptionalAI: ObservableObject {
         do { request.httpBody = try JSONSerialization.data(withJSONObject: ["model": model, "messages": [["role": "user", "content": content]], "max_tokens": 350]) }
         catch { status = "No se pudo preparar la petición"; return }
         isBusy = true; status = "Consultando tu proveedor…"
-        task = URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                guard self.generation == token else { return }
-                self.isBusy = false; self.task = nil
-                guard error == nil, let http = response as? HTTPURLResponse else { self.status = "Conexión fallida"; ActionManager.shared.hablar(self.status); return }
+        let session = self.session
+        task = Task { @MainActor [weak self] in
+            let outcome = await Self.fetch(request, session: session)
+            guard let self, self.generation == token else { return }
+            self.isBusy = false; self.task = nil
+            switch outcome {
+            case .failure(let error):
+                self.status = (error as? URLError)?.code == .dataLengthExceedsMaximum ? "Respuesta del proveedor demasiado grande" : "Conexión fallida"
+                ActionManager.shared.hablar(self.status)
+            case .success(let (data, http)):
                 guard (200..<300).contains(http.statusCode) else { self.status = "El proveedor devolvió HTTP \(http.statusCode). Revisa clave, modelo y cuota."; ActionManager.shared.hablar(self.status); return }
-                guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let choices = json["choices"] as? [[String: Any]], let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String, !text.isEmpty else {
                     self.status = "Respuesta incompatible con chat/completions"; ActionManager.shared.hablar(self.status); return
                 }
                 self.status = "Respuesta recibida"; ActionManager.shared.hablar(String(text.prefix(6000)))
             }
-        }; task?.resume()
+        }
+    }
+    /// Corta la descarga al superar `maxResponseBytes`, aunque falte Content-Length, y nunca sigue redirecciones.
+    static func fetch(_ request: URLRequest, session: URLSession) async -> Result<(Data, HTTPURLResponse), Error> {
+        do {
+            try Task.checkCancellation()
+            let (bytes, response) = try await session.bytes(for: request, delegate: OptionalAIRedirectPolicy())
+            defer { bytes.task.cancel() }
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            guard http.expectedContentLength <= Int64(maxResponseBytes) else { throw URLError(.dataLengthExceedsMaximum) }
+            var data = Data()
+            for try await byte in bytes {
+                guard data.count < maxResponseBytes else { throw URLError(.dataLengthExceedsMaximum) }
+                data.append(byte)
+            }
+            return .success((data, http))
+        } catch { return .failure(error) }
     }
     func analyzeScreen() {
         guard validate() != nil, !isBusy else { return }
         guard allowScreenUpload else { ActionManager.shared.hablar("Autoriza el envío de pantalla en IA opcional antes de usar este comando"); return }
+        let tokenAntesDelConsentimiento = generation
+        let consentimiento = NSAlert()
+        consentimiento.messageText = "Enviar el monitor principal completo"
+        consentimiento.informativeText = "Tu proveedor recibirá las ventanas visibles. Oculta información privada antes de continuar."
+        consentimiento.addButton(withTitle: "Enviar"); consentimiento.addButton(withTitle: "Cancelar")
+        guard consentimiento.runModal() == .alertFirstButtonReturn,
+              generation == tokenAntesDelConsentimiento, isEnabled, allowScreenUpload, !isBusy else { return }
         guard CGPreflightScreenCaptureAccess() else { CGRequestScreenCaptureAccess(); status = "Falta permiso de Grabación de pantalla"; return }
         generation += 1; let token = generation; isBusy = true; status = "Capturando pantalla para tu proveedor…"
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
@@ -88,5 +164,13 @@ final class OptionalAI: ObservableObject {
                 }
             }
         }
+    }
+}
+
+/// Una redirección no puede reenviar la clave, el texto o la pantalla a un destino no elegido, ni rebajar HTTPS a HTTP.
+final class OptionalAIRedirectPolicy: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

@@ -54,20 +54,23 @@ final class ColorFilterManager: ObservableObject {
             CGRequestScreenCaptureAccess(); selected = .ninguno; status = "Autoriza Grabación de pantalla y vuelve a activar el filtro"; return
         }
         isStarting = true; status = "Preparando filtro local…"; let token = generation
-        let onError: () -> Void = { [weak self] in
+        let onError: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == token else { return }
                 self.stop(); self.status = "Captura interrumpida. Reactiva el filtro."
             }
         }
-        Task { @MainActor in
+        Task { @MainActor [self] in
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 guard self.generation == token else { return }
                 let ownApp = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
                 for display in content.displays {
                     guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == display.displayID }) else { continue }
-                    let output = FilterOutput(frame: screen.frame, matrix: filter.matrix, onError: onError)
+                    let output = FilterOutput(frame: screen.frame, matrix: filter.matrix, onError: onError) { [weak self] in
+                        guard let self, self.generation == token else { return }
+                        self.status = "Filtro local · \(self.streams.count) pantalla(s)"
+                    }
                     let config = SCStreamConfiguration()
                     config.width = display.width; config.height = display.height
                     config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
@@ -77,9 +80,9 @@ final class ColorFilterManager: ObservableObject {
                     self.outputs.append(output); self.streams.append(stream)
                     try await stream.startCapture()
                     guard self.generation == token else { try? await stream.stopCapture(); return }
-                    output.window.orderFrontRegardless()
                 }
-                self.isStarting = false; self.status = "\(filter.title) · filtro local en las pantallas"
+                guard !self.streams.isEmpty else { throw CocoaError(.featureUnsupported) }
+                self.isStarting = false
             } catch {
                 guard self.generation == token else { return }
                 self.stop(); self.status = "No se pudo aplicar el filtro: \(error.localizedDescription)"
@@ -92,18 +95,27 @@ final class ColorFilterManager: ObservableObject {
         let old = streams; streams.removeAll(); outputs.removeAll()
         Task { for stream in old { try? await stream.stopCapture() } }
     }
+    func close() {
+        stop()
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
+    }
 }
 
-private final class FilterOutput: NSObject, SCStreamOutput, SCStreamDelegate {
+// Imagen/filtro sólo en queue; la ventana y su vigencia sólo en MainActor.
+final class FilterOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "pe.adapta.color", qos: .userInitiated)
-    let window: NSPanel
+    @MainActor let window: NSPanel
+    @MainActor private var acceptsFrames = true
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let filter: CIFilter
     private var pending = false
     private var valid = true
-    private let onError: () -> Void
-    init(frame: CGRect, matrix: [CGFloat], onError: @escaping () -> Void) {
+    private let onError: @Sendable () -> Void
+    private let onFirstFrame: @MainActor @Sendable () -> Void
+    @MainActor init(frame: CGRect, matrix: [CGFloat], onError: @escaping @Sendable () -> Void, onFirstFrame: @escaping @MainActor @Sendable () -> Void) {
         self.onError = onError
+        self.onFirstFrame = onFirstFrame
         filter = CIFilter(name: "CIColorMatrix")!
         filter.setValue(CIVector(x: matrix[0], y: matrix[1], z: matrix[2], w: 0), forKey: "inputRVector")
         filter.setValue(CIVector(x: matrix[3], y: matrix[4], z: matrix[5], w: 0), forKey: "inputGVector")
@@ -111,10 +123,21 @@ private final class FilterOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         window = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         window.isOpaque = true; window.backgroundColor = .black; window.ignoresMouseEvents = true; window.hasShadow = false
-        window.level = .floating; window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]; window.isReleasedWhenClosed = false
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1); window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]; window.isReleasedWhenClosed = false
         window.contentView?.wantsLayer = true; window.contentView?.layer?.contentsGravity = .resize
     }
-    func invalidate() { queue.async { self.valid = false } }
+    @MainActor func invalidate() {
+        acceptsFrames = false; window.orderOut(nil)
+        queue.async { self.valid = false }
+    }
+    @MainActor func present(_ image: CGImage) {
+        guard acceptsFrames else { return }
+        window.contentView?.layer?.contents = image
+        if !window.isVisible {
+            window.orderFrontRegardless()
+            onFirstFrame()
+        }
+    }
     func stream(_ stream: SCStream, didStopWithError error: Error) { onError() }
     func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard valid, !pending, type == .screen, buffer.isValid, let pixel = CMSampleBufferGetImageBuffer(buffer),
@@ -125,7 +148,7 @@ private final class FilterOutput: NSObject, SCStreamOutput, SCStreamDelegate {
             guard let result = filter.outputImage, let rendered = context.createCGImage(result, from: result.extent) else { return }
             pending = true
             DispatchQueue.main.async {
-                self.window.contentView?.layer?.contents = rendered
+                self.present(rendered)
                 self.queue.async { self.pending = false }
             }
         }

@@ -44,11 +44,34 @@ final class DesktopAccess {
         let attributes = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueAttribute]
         return attributes.compactMap { value(element, $0) as? String }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { String($0.prefix(500)) } ?? ""
     }
-    static func targetIdentity(at point: CGPoint) -> String? {
-        guard AXIsProcessTrusted(), let target = at(point) else { return nil }
-        var pid: pid_t = 0; AXUIElementGetPid(target, &pid)
-        return "\(pid):\(CFHash(target))"
+    static func surfaceIdentity(at point: CGPoint, windows: [[String: Any]], pid: pid_t) -> String? {
+        guard point.x.isFinite, point.y.isFinite, pid > 0 else { return nil }
+        for window in windows {
+            guard (window[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary), frame.contains(point) else { continue }
+            guard (window[kCGWindowOwnerPID as String] as? Int) == Int(pid), let id = window[kCGWindowNumber as String] as? Int else { return nil }
+            return "pixel:\(pid):\(id):\(floor(point.x / 24)):\(floor(point.y / 24))"
+        }
+        return nil
     }
+    static func cursorTarget(at point: CGPoint) -> (identity: String, center: CGPoint?)? {
+        guard AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        if let target = at(point) {
+            var pid: pid_t = 0; AXUIElementGetPid(target, &pid)
+            let role = value(target, kAXRoleAttribute) as? String
+            if pid > 0, pid != app.processIdentifier, pid != ProcessInfo.processInfo.processIdentifier { return nil }
+            if pid > 0, let role, ![kAXWindowRole, kAXApplicationRole, kAXUnknownRole].contains(role), value(target, kAXEnabledAttribute) as? Bool != false {
+                let roles = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole, kAXTextFieldRole]
+                let center = roles.contains(role) ? frame(target).map { CGPoint(x: $0.midX, y: $0.midY) } : nil
+                return ("\(pid):\(CFHash(target))", center)
+            }
+        }
+        guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        return surfaceIdentity(at: point, windows: windows, pid: app.processIdentifier).map { ($0, nil) }
+    }
+    static func targetIdentity(at point: CGPoint) -> String? { cursorTarget(at: point)?.identity }
     static func post(_ event: CGEvent?) {
         event?.setIntegerValueField(.eventSourceUserData, value: eventTag)
         event?.post(tap: .cghidEventTap)
@@ -212,25 +235,37 @@ final class DesktopAccess {
         if !contained.isEmpty { return contained }
         return NameMatch.uniqueIndex(name, names: elements.map { [controlLabel($0)] }).map { [elements[$0]] } ?? []
     }
-    private func canAct(pid: pid_t, token: Int) -> Bool { !isCancelled(token) && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid }
+    // `ventana` es nil si no se verifica; `.some(nil)` indica que la app no exponía ventana enfocada y debe seguir sin exponerla.
+    private func canAct(pid: pid_t, token: Int, ventana: AXUIElement?? = nil) -> Bool {
+        guard !isCancelled(token), NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+        guard let esperada = ventana else { return true }
+        let app = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(app, 0.08)
+        let actual = Self.element(Self.value(app, kAXFocusedWindowAttribute))
+        guard let esperada else { return actual == nil }
+        return actual.map { CFEqual(esperada, $0) } ?? false
+    }
     private func focus(_ field: AXUIElement, token: Int) -> Bool {
         var pid: pid_t = 0; AXUIElementGetPid(field, &pid)
         guard canAct(pid: pid, token: token), editable(field), Self.value(field, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return false }
         guard AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { respond("La aplicación no permite enfocar ese campo"); return false }
         selected = field; selectedPID = pid; showHighlight(Self.frame(field), token: token); respond("Campo activo: " + controlLabel(field)); return true
     }
-    private func pick(_ elements: [AXUIElement], pid: pid_t, token: Int, forceChoice: Bool = false, menuLabels: Bool = false, offset: Int = 0, action: @escaping (AXUIElement) -> Void) {
+    private func pick(_ elements: [AXUIElement], pid: pid_t, token: Int, forceChoice: Bool = false, menuLabels: Bool = false, offset: Int = 0, ventana: AXUIElement?? = nil, action: @escaping (AXUIElement) -> Void) {
         guard canAct(pid: pid, token: token), !elements.isEmpty else { return }
+        let app = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(app, 0.08)
+        let ventana: AXUIElement? = ventana ?? Self.element(Self.value(app, kAXFocusedWindowAttribute))
+        guard canAct(pid: pid, token: token, ventana: ventana) else { respond("Elección cancelada: cambió la ventana o la aplicación"); return }
         if elements.count == 1 && !forceChoice { action(elements[0]); return }
         let end = min(elements.count, offset + 6), page = Array(elements[offset..<end])
         let titles = menuLabels ? page.map(menuLabel) : page.map(controlLabel)
+        guard canAct(pid: pid, token: token, ventana: ventana) else { respond("Elección cancelada: cambió la ventana o la aplicación"); return }
         DispatchQueue.main.async {
             guard self.canAct(pid: pid, token: token) else { return }
             ActionManager.shared.presentChoices(titles) { index in
                 self.queue.async {
-                    guard self.canAct(pid: pid, token: token) else { self.respond("Elección cancelada: cambió la aplicación"); return }
+                    guard self.canAct(pid: pid, token: token, ventana: ventana) else { self.respond("Elección cancelada: cambió la ventana o la aplicación"); return }
                     self.executionToken = token
-                    if index == -1 { self.pick(elements, pid: pid, token: token, forceChoice: true, menuLabels: menuLabels, offset: end == elements.count ? 0 : end, action: action) }
+                    if index == -1 { self.pick(elements, pid: pid, token: token, forceChoice: true, menuLabels: menuLabels, offset: end == elements.count ? 0 : end, ventana: ventana, action: action) }
                     else if page.indices.contains(index) { action(page[index]) }
                 }
             }
@@ -278,7 +313,7 @@ final class DesktopAccess {
             if self.highlight == nil {
                 let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                 panel.isOpaque = false; panel.backgroundColor = .clear; panel.ignoresMouseEvents = true
-                panel.level = .statusBar; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                panel.level = .statusBar; panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]
                 panel.hasShadow = false; panel.isReleasedWhenClosed = false
                 let view = NSView(); view.wantsLayer = true; view.layer?.borderColor = NSColor.systemRed.cgColor
                 view.layer?.borderWidth = 3; view.layer?.cornerRadius = 6; panel.contentView = view; self.highlight = panel
@@ -350,6 +385,7 @@ final class TalkBackManager: ObservableObject {
                 guard let target, !label.isEmpty else { return }
                 let work = DispatchWorkItem { [weak self] in
                     guard let self, self.isEnabled, token == self.generation, let current = self.current, CFEqual(current, target) else { return }
+                    ActionManager.shared.speechReading?(true)
                     ActionManager.shared.hablar(label)
                 }
                 self.pending = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)

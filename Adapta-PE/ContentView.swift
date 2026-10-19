@@ -15,29 +15,30 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             GeometryReader { geo in
-                Image("FondoApp").resizable().scaledToFill().frame(width: max(0, geo.size.width), height: max(0, geo.size.height)).clipped().overlay(Color.black.opacity(0.5))
+                Image("FondoApp").resizable().scaledToFill().frame(width: max(0, geo.size.width), height: max(0, geo.size.height)).clipped().overlay(Color.black.opacity(0.6))
             }.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Adapta PE").font(.largeTitle.bold())
+                        Text("Adapta PE").font(.system(size: 30, weight: .bold))
                         Text("Tu escritorio, a tu ritmo").font(.body)
                     }.foregroundStyle(.white)
                     Spacer()
-                    Button("Panel flotante", systemImage: "pip") { model.showFloating() }
+                    Button("Usar panel", systemImage: "pip") { model.showFloating() }
                 }
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 16) {
                     Picker("Sección", selection: $section) {
-                        Text("Control").tag("Control"); Text("Lectura y color").tag("Lectura")
-                        Text("IA opcional").tag("IA"); Text("Ayuda").tag("Ayuda")
+                        Text("Control").tag("Control"); Text("Lectura y filtros").tag("Lectura")
+                        Text("Mascota").tag("Mascota"); Text("IA opcional").tag("IA"); Text("Ayuda").tag("Ayuda")
                     }.pickerStyle(.segmented).labelsHidden()
-                    if tracker.isTracking || tracker.isStarting {
+                    if section == "Control", tracker.isTracking || tracker.isStarting {
                         CameraSurface(tracker: tracker).frame(height: 180)
                     }
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             switch section {
                             case "Control": controlSettings
+                            case "Mascota": MascotSettings(mascot: model.mascot)
                             case "Lectura": ReadingSettings(model: model)
                             case "IA": AISettings(ai: model.ai)
                             default: helpSettings
@@ -58,11 +59,11 @@ struct ContentView: View {
     private var controlSettings: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Activa lo que necesitas").font(.title2.bold())
-            Toggle(isOn: Binding(get: { voice.isListening || voice.isStarting }, set: { $0 ? voice.startListening() : voice.stopListening() })) {
+            Toggle(isOn: Binding(get: { voice.isListening || voice.isStarting }, set: { _ in model.toggleVoice() })) {
                 Label("Voz", systemImage: "mic")
                 Text(voice.status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.toggleStyle(.switch).frame(minHeight: 44).accessibilityLabel("Control por voz").accessibilityValue(voice.status)
-            Toggle(isOn: Binding(get: { tracker.isTracking || tracker.isStarting }, set: { $0 ? tracker.startTracking() : tracker.stopTracking() })) {
+            Toggle(isOn: Binding(get: { tracker.isTracking || tracker.isStarting }, set: { _ in model.toggleTracking() })) {
                 Label("Cursor con cámara", systemImage: "viewfinder")
                 Text(tracker.statusMessage).font(.callout).foregroundStyle(.secondary)
             }.toggleStyle(.switch).frame(minHeight: 44).accessibilityLabel("Cursor con cámara").accessibilityValue(tracker.statusMessage)
@@ -72,7 +73,7 @@ struct ContentView: View {
                     Button(tracker.isPaused ? "Reanudar cursor" : "Pausar cursor", systemImage: tracker.isPaused ? "play" : "pause") { tracker.isPaused.toggle() }
                 }
             }
-            Text("Di «\(wakeWord.isEmpty ? "computadora" : wakeWord), abre Zoom» o «anticlick» después del nombre. Puedes cerrar los ajustes y seguir usando la voz.").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Di «\(wakeWord.isEmpty ? "computadora" : wakeWord), abre Zoom» o «pausar cursor». Puedes cerrar los ajustes y seguir usando la voz.").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if !voice.transcript.isEmpty { Text("Escuché: " + voice.transcript).font(.callout).lineLimit(2).accessibilityLabel("Último comando escuchado: " + voice.transcript) }
             Text(actions.lastResponse).font(.callout).foregroundStyle(.secondary).lineLimit(3).accessibilityLabel("Última respuesta: " + actions.lastResponse)
             if !model.accessibilityGranted {
@@ -92,9 +93,9 @@ struct ContentView: View {
             DisclosureGroup("Adaptar a mi movimiento") {
                 VStack(alignment: .leading, spacing: 14) {
                     Picker("Control con", selection: $tracker.controlMode) {
-                        Text("Automático").tag("automatico"); Text("Cabeza").tag("cabeza"); Text("Manos").tag("manos"); Text("Torso").tag("torso")
-                        Text("Brazo izquierdo").tag("brazo_izquierdo"); Text("Brazo derecho").tag("brazo_derecho"); Text("Zona libre").tag("zona")
+                        Text("Cabeza / torso").tag("cabeza"); Text("Brazos, manos o puños").tag("manos"); Text("Zona con textura").tag("zona")
                     }
+                    Text("Cabeza aprende tu reposo. Para manos o textura, desplaza un poco la zona visible y mantén el gesto; volver al inicio detiene el cursor.").font(.callout).foregroundStyle(.secondary)
                     HStack { Text("Velocidad"); Slider(value: $tracker.sensitivity, in: 0.3...2, step: 0.1).accessibilityLabel("Velocidad del cursor"); Text(String(format: "%.1f×", tracker.sensitivity)).monospacedDigit() }
                     Toggle("Reducir temblores", isOn: $tracker.isParkinsonMode)
                     Toggle("Adaptar a movimientos pequeños", isOn: $tracker.reducedMovement)
@@ -103,6 +104,8 @@ struct ContentView: View {
                     Text("«Cursor más lento», «calibrar cursor» y «clic derecho» también funcionan por voz.").font(.callout).foregroundStyle(.secondary)
                 }.padding(.top, 12)
             }
+            Text("Prueba «computadora, por favor abre Safari» o «computadora, quiero que abras Safari». Para dictar, di «escribe» y tu texto; las palabras siguientes se conservan.")
+                .font(.callout).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("Dispositivos y preferencias") {
                 VStack(alignment: .leading, spacing: 14) {
                     Picker("Cámara", selection: $tracker.selectedCameraID) {
@@ -141,7 +144,7 @@ struct ContentView: View {
             Text("1. Autoriza Accesibilidad.\n2. Elige cámara y control.\n3. Activa el cursor y mantén la postura al calibrar.\n4. Activa voz y prueba un comando.\n5. Usa el panel flotante o cierra ajustes.")
             Divider()
             Text("Comandos de ejemplo").font(.headline)
-            Text("«Abre YouTube»\n«Busca movilidad en Wikipedia»\n«Escribe Hola, José»\n«Selecciona Contacto» / «Pulsa lo seleccionado»\n«Enfoca buscar» / «Enter»\n«Nueva pestaña» / «Atrás» / «Recarga»\n«Control cabeza» / «Control brazo izquierdo»\n«Calibrar cursor» / «Pausar cursor»\n«Siguiente clic derecho»\n«Activar TalkBack» / «Lee la pantalla»\n«Filtro deuteranopía» / «Quitar filtro»\n«Abre Safari en el segundo monitor»\n«Mostrar ajustes» / «Detener todo»")
+            Text("«Abre YouTube»\n«Busca movilidad en Wikipedia»\n«Escribe Hola, José»\n«Selecciona Contacto» / «Pulsa lo seleccionado»\n«Enfoca buscar» / «Enter»\n«Nueva pestaña» / «Atrás» / «Recarga»\n«Control cabeza» / «Control manos»\n«Calibrar cursor» / «Pausar cursor»\n«Siguiente clic derecho»\n«Activar TalkBack» / «Lee la pantalla»\n«Filtro deuteranopía» / «Quitar filtro»\n«Abre Safari en el segundo monitor»\n«Mostrar ajustes» / «Detener todo»")
             Text("La lectura y selección dependen de los elementos accesibles que expone cada aplicación. Campos protegidos no se leen ni se dictan. Zona libre rastrea textura; una oclusión puede exigir recalibrar.").font(.system(size: 15)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 12) {
                 Button("Accesibilidad") { model.openPrivacy("Accessibility") }
@@ -166,11 +169,11 @@ struct ReadingSettings: View {
             Button("Leer ventana activa", systemImage: "speaker.wave.2") { model.actions.procesarIntencion("lee la pantalla") }.controlSize(.large)
             Button("Detener lectura") { model.actions.callar() }
             Divider()
-            Picker("Filtro de pantalla", selection: Binding(get: { filter.selected }, set: { filter.apply($0) })) {
+            Picker("Filtro de pantalla", selection: Binding(get: { filter.selected }, set: { model.mascot.react("laptop"); filter.apply($0) })) {
                 ForEach(ColorFilter.allCases) { Text($0.title).tag($0) }
             }
-            if filter.isStarting { ProgressView() }
-            Text(filter.status).font(.system(size: 16)).foregroundStyle(.secondary)
+            if filter.isStarting { ProgressView("Preparando filtro…") }
+            Text(filter.isStarting ? "Preparando: " + filter.selected.title : filter.selected == .ninguno ? filter.status : "Activo: " + filter.selected.title + " · " + filter.status).font(.system(size: 16)).foregroundStyle(.secondary)
             Text("Reproduce las matrices de color de Adapta PE sobre tus pantallas. Requiere Grabación de pantalla. Las imágenes se procesan localmente y no se guardan ni se envían.").foregroundStyle(.secondary)
             Text("Las matrices simulan alteraciones de color. No corrigen por sí mismas el daltonismo. Adapta PE queda fuera del filtro para que puedas desactivarlo.").font(.system(size: 15)).foregroundStyle(.secondary)
             Button("Quitar filtro") { filter.stop() }.disabled(filter.selected == .ninguno)
@@ -213,15 +216,28 @@ struct AISettings: View {
 struct FloatingView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var tracker: TrackingManager
+    @ObservedObject private var filter: ColorFilterManager
+    @ObservedObject private var mascot: MascotManager
     @ObservedObject private var voice: VoiceManager
     @ObservedObject private var actions: ActionManager
-    init(model: AppModel) { self.model = model; tracker = model.tracker; voice = model.voice; actions = model.actions }
+    init(model: AppModel) { self.model = model; mascot = model.mascot; filter = model.colorFilter; tracker = model.tracker; voice = model.voice; actions = model.actions }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
-                Text("Adapta PE").font(.headline)
+                PanelDragHandle(title: "Adapta PE", move: { mascot.touch(); model.moveFloating($0) }, save: model.saveFloatingPosition).frame(height: 44)
                 Spacer()
                 Menu {
+                    Toggle("Mover mascota y panel juntos", isOn: Binding(get: { mascot.linked }, set: { mascot.linked = $0 })).disabled(mascot.name == "ninguna")
+                    Menu("Elegir mascota") {
+                        ForEach(MascotManager.names, id: \.self) { name in
+                            Button(MascotManager.titles[MascotManager.names.firstIndex(of: name)!]) { mascot.choose(name) }
+                        }
+                    }
+                    Toggle("Mostrar cámara", isOn: $model.previewVisible)
+                    Menu("Filtro de pantalla") {
+                        ForEach(ColorFilter.allCases) { filter in Button { mascot.react("laptop"); model.colorFilter.apply(filter) } label: { Label(filter.title, systemImage: self.filter.selected == filter ? "checkmark" : "circle") } }
+                    }
+                    Divider()
                     ForEach(PanelCorner.allCases, id: \.self) { corner in
                         Button { model.floatingCorner = corner } label: {
                             Label(corner.title, systemImage: model.floatingCorner == corner ? "checkmark" : "square")
@@ -233,20 +249,24 @@ struct FloatingView: View {
                             Button("Monitor \(index + 1) · \(screen.localizedName)") { model.floatingScreenID = AppModel.screenID(screen) }
                         }
                     }
-                } label: { Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Cambiar esquina del panel").help("Elegir esquina y monitor")
+                } label: { Text("Opciones").frame(minWidth: 44, minHeight: 44) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Opciones del panel").help("Mascota, filtros, posición y monitor")
                 Button(action: model.showSettings) { Image(systemName: "gearshape").frame(width: 44, height: 44) }
-                    .buttonStyle(.plain).accessibilityLabel("Abrir ajustes").help("Abrir ajustes")
+                    .modifier(FloatingSettingsStyle()).accessibilityLabel("Abrir ajustes").help("Abrir ajustes")
             }
-            if tracker.isTracking || tracker.isStarting {
+            if model.previewVisible, tracker.isTracking || tracker.isStarting {
                 CameraSurface(tracker: tracker).frame(height: 180)
             }
-            Text(voice.isListening || voice.isStarting ? voice.status : tracker.isTracking ? tracker.statusMessage : "Asistencia apagada")
-                .font(.callout).foregroundStyle(.secondary).lineLimit(1).frame(height: 24, alignment: .leading)
+            HStack {
+                Toggle("Voz", isOn: Binding(get: { voice.isListening || voice.isStarting }, set: { _ in model.toggleVoice() })).toggleStyle(.switch)
+                Toggle("Cursor", isOn: Binding(get: { tracker.isTracking || tracker.isStarting }, set: { _ in model.toggleTracking() })).toggleStyle(.switch)
+            }.frame(minHeight: 44)
+            Text((voice.isListening || voice.isStarting ? voice.status : tracker.isTracking || tracker.isStarting ? tracker.statusMessage : "Voz y cursor apagados") + "\n" + (filter.selected == .ninguno ? filter.status : filter.selected.title + " · " + filter.status))
+                .font(.callout).foregroundStyle(.primary).lineLimit(2).frame(height: 40, alignment: .leading).help(filter.status)
             Text(voice.transcript.isEmpty ? "Aquí verás lo que escuché" : "Escuché: " + voice.transcript)
                 .font(.callout).lineLimit(2).frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).accessibilityLabel("Último comando escuchado: " + voice.transcript)
             if actions.choices.isEmpty {
-                Text(actions.lastResponse).font(.callout).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                Text(actions.lastResponse).font(.callout).foregroundStyle(.primary).lineLimit(2).frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Elige en " + actions.choiceContext).font(.headline).lineLimit(1)
@@ -329,12 +349,51 @@ final class PreviewView: NSView {
 // Superficie sólida y objetivo mínimo de 44 pt para ratón, cámara y navegación por teclado.
 struct AccessibleButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
     func makeBody(configuration: Configuration) -> some View {
         let fill = configuration.role == .destructive ? Color(red: 0.65, green: 0.10, blue: 0.13) : Color(red: 0.04, green: 0.26, blue: 0.60)
         configuration.label.font(.system(size: 16, weight: .semibold))
             .padding(.horizontal, 12).frame(minWidth: 44, minHeight: 44)
             .foregroundStyle(isEnabled ? Color.white : Color(red: 0.32, green: 0.34, blue: 0.37))
             .background(isEnabled ? fill : Color(red: 0.86, green: 0.88, blue: 0.90), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).inset(by: 3).strokeBorder(Color.white, lineWidth: isFocused ? 2 : 0))
             .contentShape(RoundedRectangle(cornerRadius: 8)).opacity(configuration.isPressed ? 0.85 : 1)
+    }
+}
+
+
+private struct FloatingSettingsStyle: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26, *), !reduceTransparency { content.buttonStyle(.glass) }
+        else { content.buttonStyle(.plain) }
+    }
+}
+
+private struct PanelDragHandle: NSViewRepresentable {
+    let title: String
+    let move: (CGPoint) -> Void
+    let save: () -> Void
+    func makeNSView(context: Context) -> PanelDragButton {
+        let button = PanelDragButton(title: title, target: nil, action: nil)
+        button.isBordered = false; button.font = .systemFont(ofSize: 16, weight: .semibold)
+        button.setAccessibilityLabel(title + ": arrastra para mover el panel; enfoca y usa las flechas")
+        button.toolTip = "Arrastra para mover. Con teclado: flechas."
+        button.move = move; button.save = save; return button
+    }
+    func updateNSView(_ button: PanelDragButton, context: Context) { button.move = move; button.save = save }
+}
+
+private final class PanelDragButton: NSButton {
+    override var needsPanelToBecomeKey: Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    var move: ((CGPoint) -> Void)?
+    var save: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { window?.makeKey(); window?.makeFirstResponder(self) }
+    override func mouseDragged(with event: NSEvent) { move?(CGPoint(x: event.deltaX, y: -event.deltaY)) }
+    override func mouseUp(with event: NSEvent) { save?() }
+    override func keyDown(with event: NSEvent) {
+        let moves: [UInt16: CGPoint] = [123: CGPoint(x: -24, y: 0), 124: CGPoint(x: 24, y: 0), 125: CGPoint(x: 0, y: -24), 126: CGPoint(x: 0, y: 24)]
+        if let delta = moves[event.keyCode] { move?(delta); save?() } else { super.keyDown(with: event) }
     }
 }

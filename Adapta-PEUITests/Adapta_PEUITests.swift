@@ -6,11 +6,11 @@ final class Adapta_PEUITests: XCTestCase {
         app.launchArguments = ["--uitesting"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.buttons["Panel flotante"].waitForExistence(timeout: 5))
-        app.buttons["Panel flotante"].click()
+        XCTAssertTrue(app.buttons["Usar panel"].waitForExistence(timeout: 5))
+        app.buttons["Usar panel"].click()
         XCTAssertTrue(app.buttons["Abrir ajustes"].waitForExistence(timeout: 5))
         app.buttons["Abrir ajustes"].click()
-        XCTAssertTrue(app.buttons["Panel flotante"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Usar panel"].waitForExistence(timeout: 5))
         app.radioButtons["IA opcional"].click()
         XCTAssertTrue(app.switches["Activar IA con mi API key"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.switches["Activar IA con mi API key"].value as? String, "0")
