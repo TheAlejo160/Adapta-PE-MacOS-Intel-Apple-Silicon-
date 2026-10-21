@@ -45,3 +45,7 @@ Desktop.ini
 *.log
 
 # Las pruebas y documentación sí forman parte del código público.
+
+# Skills y ajustes locales de agentes de IA
+/.claude/
+/.agents/
