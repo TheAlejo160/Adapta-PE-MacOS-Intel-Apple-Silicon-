@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CoreServices
 
 // Comparación local: acentos/capitalización, variantes conocidas y errores breves.
 struct NameMatch {
@@ -48,6 +49,19 @@ final class ApplicationCatalog {
     private let queue = DispatchQueue(label: "pe.adapta.applications", qos: .utility)
     private var entries: [(URL, [String])] = []
     private var expires = Date.distantPast
+    private var events: FSEventStreamRef?
+    private let roots = ["/Applications", "/System/Applications", "/System/Library/CoreServices", NSHomeDirectory() + "/Applications"]
+    private init() {
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
+        events = FSEventStreamCreate(nil, { _, info, _, _, _, _ in
+            guard let info else { return }
+            let catalog = Unmanaged<ApplicationCatalog>.fromOpaque(info).takeUnretainedValue()
+            catalog.expires = .distantPast; catalog.refresh()
+        }, &context, roots as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1, FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents))
+        if let events { FSEventStreamSetDispatchQueue(events, queue); FSEventStreamStart(events) }
+    }
+    deinit { if let events { FSEventStreamStop(events); FSEventStreamInvalidate(events); FSEventStreamRelease(events) } }
+    func prewarm() { queue.async { if Date() > self.expires { self.refresh() } } }
     static let aliases = [
         "zoom": "us.zoom.xos", "zum": "us.zoom.xos", "zoom workplace": "us.zoom.xos",
         "visual studio code": "com.microsoft.VSCode", "visual estudio code": "com.microsoft.VSCode",
@@ -56,14 +70,14 @@ final class ApplicationCatalog {
         "finder": "com.apple.finder", "terminal": "com.apple.Terminal", "ajustes": "com.apple.systempreferences",
         "ajustes del sistema": "com.apple.systempreferences", "calculadora": "com.apple.calculator"
     ]
-    func resolve(_ name: String, completion: @escaping (URL?) -> Void) {
+    func resolve(_ name: String, exactOnly: Bool = false, completion: @escaping (URL?) -> Void) {
         queue.async {
             let key = NameMatch.key(name)
             if let id = Self.aliases[key], let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
                 DispatchQueue.main.async { completion(url) }; return
             }
             if Date() > self.expires { self.refresh() }
-            let index = NameMatch.uniqueIndex(name, names: self.entries.map { $0.1 }, allowPartial: true)
+            let index = exactOnly ? self.entries.firstIndex(where: { $0.1.contains(where: { NameMatch.key($0) == key }) }) : NameMatch.uniqueIndex(name, names: self.entries.map { $0.1 }, allowPartial: true)
             let url = index.map { self.entries[$0].0 }
             DispatchQueue.main.async { completion(url) }
         }
@@ -71,7 +85,7 @@ final class ApplicationCatalog {
     private func refresh() {
         var result: [(URL, [String])] = [], seen = Set<String>()
         // ponytail: directorios de apps y tres niveles; no recorrer discos ni interiores de bundles.
-        var pending = ["/Applications", "/System/Applications", "/System/Library/CoreServices", NSHomeDirectory() + "/Applications"].map { (URL(fileURLWithPath: $0), 0) }
+        var pending = roots.map { (URL(fileURLWithPath: $0), 0) }
         while let (directory, depth) = pending.popLast() {
             let children = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
             for url in children {

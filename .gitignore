@@ -49,3 +49,5 @@ Desktop.ini
 # Skills y ajustes locales de agentes de IA
 /.claude/
 /.agents/
+
+.build-dd/

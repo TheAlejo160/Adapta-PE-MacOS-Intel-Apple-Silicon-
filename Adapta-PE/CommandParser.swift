@@ -4,8 +4,10 @@ import CoreGraphics
 enum VoiceCommand: Equatable {
     case dictate(String), clearText, select(String), focus(String), press(String), pressSelection, readElement(String)
     case open(String, String), search(String, String?, String), closeApp(String), shortcut(String)
-    case mascot(String), kinetic(String), readScreen, silence, cancel, unknown(String)
+    case mascot(String), kinetic(String), readScreen, silence, cancel, help, unknown(String)
     case appShortcut(String, String), keyChord(String), menu(String), listActions, listFields, writeField(String, String), selectText(String), choose(String)
+    case tutorial
+    var isUnknown: Bool { if case .unknown = self { return true }; return false }
 }
 
 struct CommandParser {
@@ -20,101 +22,17 @@ struct CommandParser {
         return String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // Reglas españolas de la extensión; sólo se reescribe el prefijo, nunca el dictado.
-    static func prepare(_ text: String) -> String {
-        var original = String(text.trimmingCharacters(in: .whitespacesAndNewlines).drop(while: { $0.isWhitespace || "¿¡,.;:".contains($0) }))
-        // La coma temporal permite retirar también una cortesía sin orden.
-        original += ","
-        while let range = original.range(of: preparationWrapper, options: [.regularExpression, .caseInsensitive]) {
-            original.removeSubrange(range)
-        }
-        if original.hasSuffix(",") { original.removeLast() }
-        let rewritten = canonicalPrefix(original)
-        if rewritten.range(of: #"^(?:escribe|dicta|introduce|ingresa texto|teclea|tipea|(?:pregunta|consulta)\s+a\s+la\s+ia|(?:selecciona|resalta)\s+(?:el\s+)?texto)\s+"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            return rewritten
-        }
-        let ending = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,;:!?"))
-        original = original.trimmingCharacters(in: ending)
-        while let range = original.range(of: #"(?:[\s,]+(?:por favor|porfa|porfis)|,\s*(?:ya pe|ya pues|pe|pues))$"#, options: [.regularExpression, .caseInsensitive]) {
-            original = String(original[..<range.lowerBound]).trimmingCharacters(in: ending)
-        }
-        if shortcuts[normalize(original)] != nil || kineticCommands[normalize(original)] != nil { return original }
-        return canonicalPrefix(original)
+    static func prepare(_ text: String, language: String = VoiceCatalog.currentLanguage) -> String {
+        VoiceCatalog.shared?.prepare(text, language: language) ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-
-    private static func canonicalPrefix(_ text: String) -> String {
-        guard let word = text.range(of: #"^[\p{L}\p{M}]+"#, options: .regularExpression),
-              let verb = preparationVerbs[normalize(String(text[word]))] else { return text }
-        return verb + text[word.upperBound...]
-    }
-
-    private static let preparationWrapper = #"^(?:oye|oe|oiga|hey|ey|eh|ya pues|ya pe|ya|ok|okey|okay|vale|bueno|a ver|mira|este|ahora|ahorita|entonces|y|porfa|porfis|por favor|favor de|me haces el favor de|hazme el favor de|me har[ií]as el favor de|h[aá]game el favor de|me hace el favor de|ay[uú]dame a|ay[uú]deme a|me ayudas a|quiero que|necesito que|quisiera que|me puedes|me podr[ií]as|me puede|me podr[ií]a|puedes|podr[ií]as|puede|podr[ií]a|pod[eé]s|quiero|quisiera|necesito|me gustar[ií]a|intenta|trata de|me|(?:vamos|voy) a(?= \S+(?:ar|er|ir)\b))[\s,¿¡]+"#
-    private static let preparationVerbs: [String: String] = {
-        let groups: [(String, String)] = [
-            ("abre", "abra abras abri abrir abres abreme abrime abrame abrirme"),
-            ("busca", "busque busques buscar buscas buscame busqueme buscarme"),
-            ("escribe", "escriba escribas escribi escribir escribes escribeme escribime"),
-            ("dicta", "dicte dictes dictar"),
-            ("cierra", "cierre cierres cerra cerrar cierras cierrame cerrame"),
-            ("baja", "baje bajes bajar bajas bajale"),
-            ("sube", "suba subas subi subir subes subele"),
-            ("vuelve", "vuelva vuelvas volve volver vuelves"),
-            ("regresa", "regrese regreses regresar regresas"),
-            ("retrocede", "retroceda retrocedas"),
-            ("avanza", "avance avances avanzar avanzas"),
-            ("recarga", "recargue recargues recargar recargas"),
-            ("actualiza", "actualice actualices"),
-            ("refresca", "refresque refresques"),
-            ("selecciona", "seleccione selecciones seleccionar seleccionas seleccioname"),
-            ("resalta", "resalte resaltes resaltar"),
-            ("pulsa", "pulse pulses pulsar pulsas toca toque toques tocar clickea cliquea clica clickear cliquear clique"),
-            ("presiona", "presione presiones presionar presionas aprieta apriete aprietes apreta apretar aplasta aplaste aplastes aplastar"),
-            ("enfoca", "enfoque enfoques enfocar"),
-            ("reproduce", "reproduzca reproduzcas reproducir"),
-            ("pausa", "pause pauses"),
-            ("haz", "haga hagas hace hacer haces"),
-            ("hazle", "hagale hacele"),
-            ("dale", "dele"),
-            ("cancela", "cancele canceles"),
-            ("borra", "borre borres borrar borras"),
-            ("limpia", "limpie limpies limpiar"),
-            ("acerca", "acerque"),
-            ("aleja", "aleje"),
-            ("amplia", "amplie ampliar"),
-            ("agranda", "agrande agrandar"),
-            ("achica", "achique achicar"),
-            ("aumenta", "aumente"),
-            ("reduce", "reduzca"),
-            ("ve", "vaya vayas anda"),
-            ("entra", "entre entres entrar"),
-            ("ingresa", "ingrese"),
-            ("visita", "visite"),
-            ("inicia", "inicie"),
-            ("ejecuta", "ejecute"),
-            ("duplica", "duplique dupliques duplicar"),
-            ("silencia", "silencie silencies silenciar mutea mutee mutees mutear"),
-            ("calla", "callate callese"),
-            ("activa", "active actives"),
-            ("desactiva", "desactive"),
-            ("apaga", "apague apagues apagar"),
-            ("enciende", "encienda"),
-            ("prende", "prenda"),
-            ("quita", "quite quites quitar"),
-            ("cambia", "cambie cambies cambiar"),
-            ("pasa", "pase pases pasar"),
-            ("googlea", "googlee"),
-            ("envia", "envie envies"),
-            ("manda", "mande mandes")
-        ]
-        return Dictionary(uniqueKeysWithValues: groups.flatMap { verb, forms in
-            forms.split(separator: " ").map { (String($0), verb) }
-        })
-    }()
 
     static func parse(_ text: String) -> VoiceCommand {
         var original = prepare(text)
         let clean = original.replacingOccurrences(of: "[.!?]+$", with: "", options: .regularExpression)
         let normalized = normalize(clean)
+        if ["busca en la pagina", "busca en el documento"].contains(normalized) { return .shortcut("buscar_texto") }
+        if ["ayuda", "que puedo decir", "ayuda de voz"].contains(normalized) { return .help }
+        if ["tutorial", "abre el tutorial", "abrir tutorial", "inicia el tutorial", "iniciar tutorial", "muestra el tutorial", "mostrar tutorial"].contains(normalized) { return .tutorial }
         if let command = MascotCommand.parse(normalized) { return .mascot(command) }
         if ["que puedo hacer", "mostrar comandos", "muestra comandos", "listar acciones", "muestra acciones", "acciones disponibles"].contains(normalized) { return .listActions }
         if ["muestra campos", "mostrar campos", "buscar campos", "busca campos", "busca campos de texto", "campos de texto", "donde puedo escribir"].contains(normalized) { return .listFields }
@@ -136,8 +54,8 @@ struct CommandParser {
         if let value = tail("^(?:escribe|escribir|dicta|dictar|introduce|ingresa texto)\\s+", in: original) { return .dictate(value) }
         original = original.replacingOccurrences(of: "[, ]+por favor[.!?]*$|[.!?]+$", with: "", options: [.regularExpression, .caseInsensitive])
         let cmd = normalize(original)
-        if ["cancelar", "cancela", "olvidalo", "no hagas nada", "cancelar seleccion", "quita la seleccion"].contains(cmd) { return .cancel }
-        if ["callar", "silencio", "deja de leer", "deja de hablar", "para la lectura"].contains(cmd) { return .silence }
+        if ["cancelar", "cancela", "olvidalo", "no hagas nada", "cancelar seleccion", "quita la seleccion", "cancela eso", "olvida eso", "no importa", "dejalo", "deselecciona"].contains(cmd) { return .cancel }
+        if ["callar", "silencio", "deja de leer", "deja de hablar", "para la lectura", "calla", "callate", "basta", "detente"].contains(cmd) { return .silence }
         if ["lee la pantalla", "leer pantalla", "leer la pantalla", "lee pantalla", "leer ventana", "lee la ventana", "ojo bionico"].contains(cmd) { return .readScreen }
         if let target = tail("^(?:lee|leer|léeme)\\s+", in: original) { return .readElement(controlName(target)) }
         if let target = tail("^(?:selecciona(?:r)?|resalta(?:r)?|marca(?:r)?)\\s+", in: original) { return .select(controlName(target)) }
@@ -168,25 +86,35 @@ struct CommandParser {
         if let match = patterns.first(where: { cmd.range(of: $0.0, options: .regularExpression) != nil }) { return .shortcut(match.1) }
 
         if cmd.range(of: "^(borra|borrar|limpia|limpiar)( el)? (texto|campo)$", options: .regularExpression) != nil { return .clearText }
-        if cmd.range(of: "^(baja(r)?|desciende|sube|subir|asciende|((desplazate|desliza|haz scroll|scroll) )?(hacia )?(abajo|arriba))( (un poco|mas|la pagina|una pantalla))?$", options: .regularExpression) != nil {
-            return .shortcut(cmd.range(of: "sube|subir|asciende|arriba", options: .regularExpression) != nil ? "subir" : "bajar")
+        if let tab = captures("^(?:(?:ve|cambia|salta) a (?:la )?)?pestana (?:numero )?([1-9])$", in: cmd)?.first { return .shortcut("pestana:" + tab) }
+        if cmd == "ultima pestana" { return .shortcut("pestana:9") }
+        if cmd.range(of: "^(?:duplica|clona)(?: esta| la)? pestana$", options: .regularExpression) != nil { return .shortcut("duplicar_pestana") }
+        if cmd.range(of: "^(?:cierra|cerrar)(?: todas)? las (?:otras|demas) pestanas$", options: .regularExpression) != nil { return .shortcut("cerrar_otras") }
+        if ["silencia la pestana", "silencia pestana", "silenciar pestana"].contains(cmd) { return .shortcut("silenciar") }
+        if ["activa el sonido", "reactiva el sonido"].contains(cmd) { return .shortcut("activar_sonido") }
+        if let scroll = captures("^(baja|bajar|desciende|sube|subir|asciende|(?:(?:desplazate|desliza|haz scroll|scroll) )?(?:hacia )?(?:abajo|arriba))(?: (un poco|bastante|mucho|del todo|mas|la pagina|una pantalla))?$", in: cmd) {
+            let up = scroll[0].range(of: "sube|subir|asciende|arriba", options: .regularExpression) != nil
+            if scroll[1] == "del todo" { return .shortcut(up ? "inicio" : "final") }
+            let direction = up ? "subir" : "bajar"
+            return .shortcut(direction + (scroll[1] == "un poco" ? ":4" : ["bastante", "mucho"].contains(scroll[1]) ? ":36" : ""))
         }
         var destination = "actual"
         if let range = original.range(of: "\\s+(?:(?:en|en una|en la|en otra)\\s+)?(?:nueva (?:pestaña|ventana)|(?:pestaña|ventana) nueva|otra (?:pestaña|ventana))$", options: [.regularExpression, .caseInsensitive, .diacriticInsensitive]) {
             destination = normalize(String(original[range])).contains("ventana") ? "ventana" : "pestana"
             original = String(original[..<range.lowerBound])
         }
-        if let query = tail("^(?:busca(?:r)?|búsqueda(?: de)?|(?:haz|realiza|ejecuta)(?: una)? búsqueda(?: de)?|encuentra|consulta|investiga)\\s+", in: original) {
+        if let query = tail("^(?:busca(?:r)?|búsqueda(?: de)?|(?:haz|realiza|ejecuta)(?: una)? búsqueda(?: de)?|encuentra|consulta|investiga|googlea|averigua)\\s+", in: original) {
             let normalized = normalize(query)
             for site in VoiceSite.catalog {
                 for alias in site.aliases {
+                    if normalized == "en " + alias { return .search("", site.id, destination) }
                     if normalized.hasSuffix(" en " + alias) { return .search(String(query.dropLast(alias.count + 4)), site.id, destination) }
                     if normalized.hasPrefix("en " + alias + " ") { return .search(String(query.dropFirst(alias.count + 4)), site.id, destination) }
                 }
             }
             return .search(query, nil, destination)
         }
-        if let target = tail("^(?:abre|abrir|ejecuta|ejecutar|inicia|iniciar|lanza|lanzar|muestra|mostrar|arranca|arrancar|entra a|entra en|ingresa a|ingresa en|ve a|ir a|visita|visitar)\\s+", in: original) {
+        if let target = tail("^(?:abre|abrir|ejecuta|ejecutar|inicia|iniciar|lanza|lanzar|muestra|mostrar|arranca|arrancar|entra a|entra en|ingresa a|ingresa en|ve a|ir a|visita|visitar|llévame a|accede a|muéstrame|dirígete a|pon)\\s+", in: original) {
             let cleaned = tail("^(?:la página(?: de)?|el sitio(?: de)?|la aplicación|la app|el programa|una ventana de|el|la|un|una)\\s+", in: target) ?? target
             return .open(cleaned, destination)
         }
@@ -230,7 +158,7 @@ struct CommandParser {
         "reduce zoom": "zoom_menos", "aleja": "zoom_menos", "zoom menos": "zoom_menos", "restablece zoom": "zoom_normal", "zoom normal": "zoom_normal",
         "inicio": "inicio", "ve al inicio": "inicio", "final": "final", "ve al final": "final",
         "copia": "copiar", "copiar": "copiar", "copia esto": "copiar", "pega": "pegar", "pegar": "pegar", "pega esto": "pegar",
-        "enter": "enter", "intro": "enter", "presiona enter": "enter", "pulsa enter": "enter", "enviar formulario": "enter",
+        "enter": "enter", "intro": "enter", "presiona enter": "enter", "pulsa enter": "enter", "enviar formulario": "enter", "envia el formulario": "enter", "sal de pantalla completa": "pantalla_completa",
         "deshacer": "deshacer", "rehacer": "rehacer", "seleccionar todo": "seleccionar_todo",
         "reproduce": "reproducir", "reproduce video": "reproducir", "continuar video": "reproducir", "pausa": "pausar", "pausa video": "pausar"
     ]
@@ -298,34 +226,7 @@ struct VoiceSite {
         let host = URL(string: home)?.host ?? ""
         return VoiceSite.match("google")?.url(query: query + " site:" + host)
     }
-    static let catalog: [VoiceSite] = [
-        VoiceSite(id: "google", aliases: ["google"], home: "https://www.google.com/", search: "https://www.google.com/search?q="),
-        VoiceSite(id: "youtube", aliases: ["youtube", "you tube"], home: "https://www.youtube.com/", search: "https://www.youtube.com/results?search_query="),
-        VoiceSite(id: "mercadolibre", aliases: ["mercado libre", "mercadolibre"], home: "https://www.mercadolibre.com.pe/", search: "https://listado.mercadolibre.com.pe/"),
-        VoiceSite(id: "amazon", aliases: ["amazon"], home: "https://www.amazon.com/", search: "https://www.amazon.com/s?k="),
-        VoiceSite(id: "wikipedia", aliases: ["wikipedia"], home: "https://es.wikipedia.org/", search: "https://es.wikipedia.org/wiki/Especial:Buscar?search="),
-        VoiceSite(id: "facebook", aliases: ["facebook", "face book"], home: "https://www.facebook.com/", search: "https://www.facebook.com/search/top/?q="),
-        VoiceSite(id: "instagram", aliases: ["instagram"], home: "https://www.instagram.com/", search: nil),
-        VoiceSite(id: "x", aliases: ["x", "twitter", "equis"], home: "https://x.com/", search: "https://x.com/search?q="),
-        VoiceSite(id: "reddit", aliases: ["reddit"], home: "https://www.reddit.com/", search: "https://www.reddit.com/search/?q="),
-        VoiceSite(id: "netflix", aliases: ["netflix"], home: "https://www.netflix.com/", search: "https://www.netflix.com/search?q="),
-        VoiceSite(id: "twitch", aliases: ["twitch"], home: "https://www.twitch.tv/", search: "https://www.twitch.tv/search?term="),
-        VoiceSite(id: "github", aliases: ["github", "git hub"], home: "https://github.com/", search: "https://github.com/search?q="),
-        VoiceSite(id: "chatgpt", aliases: ["chatgpt", "chat gpt"], home: "https://chatgpt.com/", search: nil),
-        VoiceSite(id: "claude", aliases: ["claude"], home: "https://claude.ai/", search: nil),
-        VoiceSite(id: "gemini", aliases: ["gemini"], home: "https://gemini.google.com/", search: nil),
-        VoiceSite(id: "canvas", aliases: ["canvas"], home: "https://canvas.instructure.com/", search: nil),
-        VoiceSite(id: "gmail", aliases: ["gmail", "g mail", "correo de google"], home: "https://mail.google.com/", search: nil),
-        VoiceSite(id: "outlook", aliases: ["outlook", "hotmail"], home: "https://outlook.live.com/", search: nil),
-        VoiceSite(id: "whatsapp", aliases: ["whatsapp", "whats app", "wasap"], home: "https://web.whatsapp.com/", search: nil),
-        VoiceSite(id: "telegram", aliases: ["telegram"], home: "https://web.telegram.org/", search: nil),
-        VoiceSite(id: "drive", aliases: ["drive", "google drive"], home: "https://drive.google.com/", search: nil),
-        VoiceSite(id: "documentos", aliases: ["google docs", "documentos de google"], home: "https://docs.google.com/", search: nil),
-        VoiceSite(id: "mapas", aliases: ["mapas", "maps", "google maps"], home: "https://www.google.com/maps/", search: "https://www.google.com/maps/search/?api=1&query="),
-        VoiceSite(id: "linkedin", aliases: ["linkedin", "linked in"], home: "https://www.linkedin.com/", search: nil),
-        VoiceSite(id: "tiktok", aliases: ["tiktok", "tik tok"], home: "https://www.tiktok.com/", search: nil),
-        VoiceSite(id: "spotify", aliases: ["spotify"], home: "https://open.spotify.com/", search: nil),
-        VoiceSite(id: "bing", aliases: ["bing"], home: "https://www.bing.com/", search: "https://www.bing.com/search?q="),
-        VoiceSite(id: "duckduckgo", aliases: ["duckduckgo", "duck duck go"], home: "https://duckduckgo.com/", search: "https://duckduckgo.com/?q="),
-    ]
+    static let catalog: [VoiceSite] = (VoiceCatalog.shared?.sitios ?? [:]).sorted { $0.key < $1.key }.map {
+        VoiceSite(id: $0.key, aliases: $0.value.alias, home: $0.value.inicio, search: $0.value.busqueda)
+    }
 }

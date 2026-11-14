@@ -44,9 +44,16 @@ struct MascotActivity {
 @MainActor
 final class MascotManager: ObservableObject {
     static let names = ["ninguna", "tinku", "cuchu", "yati"]
-    static let titles = ["Sin mascota", "Tinku · gallito", "Cuchu · cuy", "Yati · llama"]
+    static var titles: [String] {
+        [
+            Textos.t("popup.sinMascota"),
+            Textos.t("popup.tinku"),
+            Textos.t("popup.cuchu"),
+            Textos.t("popup.yati")
+        ]
+    }
     @Published private(set) var name = "ninguna"
-    @Published private(set) var status = "Sin mascota"
+    @Published private(set) var status = Textos.t("popup.sinMascota")
     private var playback: MascotPlayback?
     private var imagePanel: NSPanel?
     private var handlePanel: NSPanel?
@@ -163,12 +170,23 @@ final class MascotManager: ObservableObject {
             }
         }
     }
+    func happy() { react("happy") }
+    func confused() { react("confused") }
     func react(_ state: String) {
         guard !activity.manualSleep, playback != nil else { return }
         if state != "idle" { sleeping = false; touch() }
         guard !sleeping, playback?.state != state else { return }
         playback?.set(state)
-        status = name.capitalized + " · " + (["read": "leyendo", "talk": "hablando", "phone": "escuchando", "laptop": "realizando tu acción", "idle": "visible"][state] ?? state)
+        let stateNames: [String: String] = [
+            "read": "leyendo",
+            "talk": "hablando",
+            "phone": "escuchando",
+            "laptop": "realizando tu acción",
+            "idle": "visible",
+            "happy": Textos.t("mascota.estadoFeliz"),
+            "confused": Textos.t("mascota.estadoConfundida")
+        ]
+        status = name.capitalized + " · " + (stateNames[state] ?? state)
         draw(); refreshTimer()
     }
     func gesture(_ state: String) {
@@ -251,29 +269,31 @@ private final class MascotHandle: NSButton {
 
 struct MascotSettings: View {
     @ObservedObject var mascot: MascotManager
+    @ObservedObject private var textos = Textos.shared
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Tu compañía peruana").font(.title2.bold())
-            Text("Tinku, Cuchu o Yati. Puedes cambiarla u ocultarla cuando quieras.").foregroundStyle(.secondary)
-            Picker("Tu mascota", selection: Binding(get: { mascot.name }, set: mascot.choose)) {
+            Text(textos.t("popup.mascota")).font(.title2.bold())
+            Text(textos.t("popup.mascotaDescripcion")).foregroundStyle(.secondary)
+            Picker(textos.t("popup.mascota"), selection: Binding(get: { mascot.name }, set: mascot.choose)) {
                 ForEach(MascotManager.names, id: \.self) { name in
                     Text(MascotManager.titles[MascotManager.names.firstIndex(of: name)!]).tag(name)
                 }
             }
             .tint(.primary)
             Text(mascot.status).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("Arrastra su nombre entre monitores o enfócalo y usa las flechas. Di «mascota Cuchu» después de llamar al asistente. El dibujo deja pasar tus clics.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(textos.t("popup.ayudaMascota")).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if mascot.name != "ninguna" {
-                Toggle("Mover mascota y panel juntos", isOn: $mascot.linked).toggleStyle(.switch).frame(minHeight: 44)
+                Toggle(textos.t("control.moverMascotaYPanel"), isOn: $mascot.linked).toggleStyle(.switch).frame(minHeight: 44)
                 Text("Unida: queda arriba del panel; arrastra cualquiera de sus títulos. Separada: conserva su lugar propio. Descansa tras 90 segundos sin uso y despierta al recibir una acción.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Button("Saludar") { mascot.gesture("wave") }
-                    Button("Dormir") { mascot.gesture("sleep") }
-                    Button("Despertar") { mascot.gesture("wake") }
+                    Button(textos.t("mascota.saludar")) { mascot.gesture("wave") }
+                    Button(textos.t("mascota.dormir")) { mascot.gesture("sleep") }
+                    Button(textos.t("mascota.despertar")) { mascot.gesture("wake") }
                 }
                 HStack {
-                    Button("Mover con teclas") { mascot.focusHandle() }
-                    Button("Otro monitor") { mascot.nextScreen() }
+                    Button(textos.t("mascota.moverTeclas")) { mascot.focusHandle() }
+                    Button(textos.t("mascota.otroMonitor")) { mascot.nextScreen() }
                 }
             }
         }

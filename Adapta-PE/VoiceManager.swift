@@ -17,9 +17,69 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     @Published var allowAppleNetwork = UserDefaults.standard.bool(forKey: "AllowAppleNetwork") {
         didSet { UserDefaults.standard.set(allowAppleNetwork, forKey: "AllowAppleNetwork"); if isListening || isStarting { stopListening(remember: false); startListening() } }
     }
+    @Published var languagePreference = UserDefaults.standard.string(forKey: "VoiceLanguage") ?? "auto" {
+        didSet {
+            UserDefaults.standard.set(languagePreference, forKey: "VoiceLanguage")
+            Textos.shared.fijarIdioma(languagePreference)
+            if isListening || isStarting { stopListening(remember: false); startListening() }
+        }
+    }
+    @Published private(set) var wakeName = WakeName.saved
+    @Published private(set) var activationAliases = UserDefaults.standard.stringArray(forKey: "AliasActivacion") ?? []
+    @Published var alsoComputer = UserDefaults.standard.bool(forKey: "TambienComputadora") {
+        didSet { UserDefaults.standard.set(alsoComputer, forKey: "TambienComputadora"); refreshVocabulary() }
+    }
+    @Published var conversationMode = UserDefaults.standard.bool(forKey: "ModoConversacion") {
+        didSet { UserDefaults.standard.set(conversationMode, forKey: "ModoConversacion"); conversation.cancel(); conversation.enabled = conversationMode }
+    }
+    @Published private(set) var nameTrialStatus = ""
+    @Published private(set) var nameTrialSample = ""
+    @Published private(set) var testingName = false
+    private var nameTrial = VoiceNameTrial()
+    private var trialTimeout: DispatchWorkItem?
+    private var speechTimeout: DispatchWorkItem?
+    private var conversation = VoiceConversation()
+    private var turn = 0
+    private var phraseDuringSpeech = false
+    private func refreshVocabulary() {
+        if isListening { beginRecognition() }
+    }
+    func saveAliases(_ values: [String]) -> String? {
+        guard let aliases = VoiceActivation.aliases(values, name: wakeName) else { return Textos.t("popup.aliasInvalido") }
+        activationAliases = aliases; UserDefaults.standard.set(aliases, forKey: "AliasActivacion"); refreshVocabulary(); return nil
+    }
+    func testWakeName() {
+        guard isListening else { nameTrialStatus = "Activa el micrófono para probar el nombre."; return }
+        turn += 1; conversation.cancel(); input.cancel(); trialTimeout?.cancel()
+        nameTrial.start(at: ProcessInfo.processInfo.systemUptime); testingName = true; nameTrialSample = ""; nameTrialStatus = "Di tu nombre. La siguiente frase se mostrará sin ejecutar órdenes (15 s)."
+        beginRecognition()
+        let work = DispatchWorkItem { [weak self] in self?.expireNameTrial() }
+        trialTimeout = work; DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+    }
+    private func expireNameTrial() {
+        guard nameTrial.expired(at: ProcessInfo.processInfo.systemUptime) else { return }
+        testingName = false; nameTrialStatus = Textos.t("popup.pruebaCaducada"); recognized = ""
+        // Invalida la tarea completa: un final tardío de la muestra nunca llega al ejecutor.
+        if isListening { beginRecognition() }
+    }
+    func addTrialAlias() -> String? {
+        guard !nameTrialSample.isEmpty else { return "Primero prueba el nombre." }
+        let error = saveAliases(activationAliases + [nameTrialSample])
+        if error == nil { nameTrialStatus = "Alias añadido: \(nameTrialSample)"; nameTrialSample = "" }
+        return error
+    }
+    func saveWakeName(_ value: String) -> String? {
+        if let error = WakeName.error(value) { return error }
+        guard VoiceActivation.aliases(activationAliases, name: value) != nil else { return "Un alias coincide con el nombre. Retíralo antes de guardar." }
+        wakeName = WakeName.normalized(value); UserDefaults.standard.set(wakeName, forKey: "WakeWord")
+        if isListening || isStarting { stopListening(remember: false); startListening() }
+        return nil
+    }
     var onWake: (() -> Void)?
-    var onCommand: ((String) -> Void)?
     var followUpAllowed: (() -> Bool)?
+    var confirmationAllowed: (() -> Bool)?
+    var onConversationClose: (() -> Void)?
+    var executeCommand: ((String, @escaping (VoiceExecutionResult) -> Void) -> Void)?
     private let captureSession = AVCaptureSession()
     private let audioOutput = AVCaptureAudioDataOutput()
     private let audioQueue = DispatchQueue(label: "pe.adapta.audio", qos: .userInitiated)
@@ -35,6 +95,9 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     private var failures = 0
     private var recognized = ""
     private var input = VoiceInputState()
+    private var stream = VoiceTranscriptState()
+    private var segments: [VoiceTranscriptState.Segment] = []
+    private let signposter = OSSignposter(subsystem: "pe.adapta.desktop", category: "voice")
     private var pendingWakeCue = false
     private let wakeSound = NSSound(named: "Glass")
     private var listeningActivity: NSObjectProtocol?
@@ -51,6 +114,7 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
 
     override init() {
         super.init()
+        conversation.enabled = conversationMode
         runtimeObserver = NotificationCenter.default.addObserver(forName: .AVCaptureSessionRuntimeError, object: captureSession, queue: .main) { [weak self] _ in
             self?.recoverCapture()
         }
@@ -75,6 +139,7 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     func startListening() {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.startListening() }; return }
         guard !isListening, !isStarting else { return }
+        guard VoiceCatalog.shared != nil else { status = "Catálogo de voz no disponible"; return }
         generation += 1; let token = generation; isStarting = true; status = "Solicitando micrófono…"
         let recibirMicrofono: @MainActor @Sendable (Bool) -> Void = { [weak self] allowed in
             guard let self, self.generation == token, self.isStarting else { return }
@@ -82,9 +147,11 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
             let recibirReconocimiento: @MainActor @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void = { [weak self] authorization in
                 guard let self, self.generation == token, self.isStarting else { return }
                 guard authorization == .authorized else { self.isStarting = false; self.status = "Reconocimiento de voz sin permiso"; return }
-                let local = ["es-PE", "es-ES", "es-MX"].compactMap { SFSpeechRecognizer(locale: Locale(identifier: $0)) }.first { $0.supportsOnDeviceRecognition && $0.isAvailable }
-                self.recognizer = local ?? (self.allowAppleNetwork ? SFSpeechRecognizer(locale: Locale(identifier: "es-PE")) : nil)
-                guard self.recognizer != nil else { self.isStarting = false; self.status = "Español local no disponible. Instala recursos de dictado o autoriza reconocimiento de Apple por red."; return }
+                let locale = VoiceCatalog.currentLocale
+                let codes = [locale] + (VoiceCatalog.shared?.codigos.filter { $0.hasPrefix(String(locale.prefix(2)) + "-") && $0 != locale } ?? [])
+                let local = codes.compactMap { SFSpeechRecognizer(locale: Locale(identifier: $0)) }.first { $0.supportsOnDeviceRecognition && $0.isAvailable }
+                self.recognizer = local ?? (self.allowAppleNetwork ? SFSpeechRecognizer(locale: Locale(identifier: locale)) : nil)
+                guard self.recognizer != nil else { self.isStarting = false; self.status = "Reconocimiento local del idioma no disponible. Instala recursos de dictado o autoriza reconocimiento de Apple por red."; return }
                 self.setupHardware(token: token)
             }
             self.solicitarReconocimiento { authorization in
@@ -130,6 +197,7 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     func stopListening(remember: Bool = true) {
         if remember { UserDefaults.standard.set(false, forKey: "VoiceActive") }
         health?.cancel(); health = nil; captureFailures = 0; endListeningActivity(); pendingWakeCue = false
+        turn += 1; conversation.cancel(); nameTrial.cancel(); trialTimeout?.cancel(); speechTimeout?.cancel(); testingName = false
         generation += 1; isStarting = false; isListening = false
         clearRecognition(); commandTimeout?.cancel(); commandTimeout = nil; input.cancel()
         recognized = ""; transcript = ""; status = "Micrófono apagado"
@@ -143,25 +211,31 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
     }
     private func beginRecognition() {
         guard isListening, let recognizer, recognizer.isAvailable else { if isListening { scheduleRestart(failed: true) }; return }
-        clearRecognition(); recognized = ""; input.beginUtterance()
+        clearRecognition(); recognized = ""; segments = []; stream.reset(); input.beginUtterance(); phraseDuringSpeech = speaking
         let token = taskGeneration
         let request = SFSpeechAudioBufferRecognitionRequest()
+        request.contextualStrings = VoiceActivation.contextualStrings(name: wakeName, aliases: activationAliases, alsoComputer: alsoComputer, language: VoiceCatalog.currentLanguage)
+        request.taskHint = .confirmation
         request.shouldReportPartialResults = true; request.requiresOnDeviceRecognition = !allowAppleNetwork || recognizer.supportsOnDeviceRecognition
         audioQueue.async { self.request = request }
         logger.info("Reconocimiento listo; sesión \(token)")
-        let word = (UserDefaults.standard.string(forKey: "WakeWord") ?? "computadora").trimmingCharacters(in: .whitespacesAndNewlines)
+        let word = wakeName
         status = waiting ? "Dime el comando…" : "Di «\(word.isEmpty ? "computadora" : word)»"
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self, self.taskGeneration == token, self.isListening else { return }
                 if let result {
-                    let text = result.bestTranscription.formattedString
+                    let transcription = result.bestTranscription
+                    self.segments = transcription.segments.map { VoiceTranscriptState.Segment(range: $0.substringRange, start: $0.timestamp, duration: $0.duration) }
+                    let text = self.stream.suffix(transcription.formattedString, segments: self.segments)
+                    if self.speaking { self.phraseDuringSpeech = true }
                     if text != self.recognized {
+                        self.signposter.emitEvent("TranscriptUpdated")
                         self.recognized = text; self.transcript = text; self.failures = 0
                         self.silence?.cancel()
                         let work = DispatchWorkItem { [weak self] in guard let self, self.taskGeneration == token else { return }; self.consume() }
                         self.silence = work
-                        DispatchQueue.main.asyncAfter(deadline: .now() + (Self.isWakeOnly(text) ? 0.45 : 1.0), execute: work)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + (Self.isWakeOnly(text) ? 0.35 : 0.5), execute: work)
                     }
                 }
                 if let error { self.logger.error("Reconocimiento finalizado: \(error.localizedDescription, privacy: .public)") }
@@ -186,17 +260,33 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         safety = work; DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: work)
     }
     private static func isWakeOnly(_ text: String) -> Bool {
-        let word = UserDefaults.standard.string(forKey: "WakeWord") ?? "computadora"
+        let word = WakeName.saved
         var wake = WakePhraseState()
         return wake.consume(text, wakeWord: word, time: 0).beep
     }
     private var waiting: Bool { ProcessInfo.processInfo.systemUptime < input.waitingUntil }
     private func consume() {
         guard isListening else { return }
-        let result = input.consume(recognized, wakeWord: UserDefaults.standard.string(forKey: "WakeWord") ?? "computadora", time: ProcessInfo.processInfo.systemUptime, speaking: speaking, followUp: followUpAllowed?() == true)
+        let interval = signposter.beginInterval("DispatchCommand")
+        defer { signposter.endInterval("DispatchCommand", interval) }
+        let time = ProcessInfo.processInfo.systemUptime
+        conversation.tick(at: time)
+        if testingName {
+            if nameTrial.expired(at: time) {
+                testingName = false; nameTrialStatus = Textos.t("popup.pruebaCaducada"); beginRecognition(); return
+            }
+            guard !recognized.isEmpty, !speaking else { return }
+            if let sample = nameTrial.capture(recognized, at: time) {
+                trialTimeout?.cancel(); testingName = false; nameTrialSample = sample; nameTrialStatus = "He oído: \(sample)"
+                stream.commit(segments); recognized = ""; input.cancel(); input.beginUtterance()
+            }
+            return
+        }
+        let result = input.consume(recognized, wakeWord: wakeName, time: time, speaking: speaking, followUp: followUpAllowed?() == true, confirming: confirmationAllowed?() == true, conversationWaiting: conversation.state == .waiting, aliases: activationAliases, alsoComputer: alsoComputer, beganDuringSpeech: phraseDuringSpeech)
         guard result.beep || result.command != nil else { return }
         if result.beep {
-            onWake?(); pendingWakeCue = true; status = "Dime el comando…"
+            onWake?(); status = "Dime el comando…"
+            if wakeSound?.play() != true { NSSound.beep() }
             commandTimeout?.cancel()
             let token = generation
             let work = DispatchWorkItem { [weak self] in
@@ -209,10 +299,19 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         if let command = result.command {
             commandTimeout?.cancel(); commandTimeout = nil
             logger.info("Comando completo entregado; rearmando escucha")
-            onCommand?(command)
+            turn += 1; let currentTurn = turn
+            if conversationMode && VoiceConversation.closes(command, language: VoiceCatalog.currentLanguage) {
+                conversation.cancel(); input.cancel(); onConversationClose?(); status = "Conversación cerrada; micrófono activo"
+            } else {
+                conversation.begin()
+                executeCommand?(command) { [weak self] result in
+                    guard let self, self.turn == currentTurn else { return }
+                    self.conversation.receive(result, at: ProcessInfo.processInfo.systemUptime)
+                }
+            }
         }
-        // Una orden por tarea, independiente de la aplicación que tome el primer plano.
-        scheduleRestart(failed: false)
+        stream.commit(segments); recognized = ""; input.beginUtterance(); phraseDuringSpeech = speaking
+        signposter.emitEvent("CommandDispatched")
     }
     private func scheduleRestart(failed: Bool) {
         guard isListening else { return }
@@ -223,12 +322,18 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         let work = DispatchWorkItem { [weak self] in guard let self, self.generation == token, self.isListening else { return }; self.restart = nil; self.beginRecognition() }
         restart = work; DispatchQueue.main.asyncAfter(deadline: .now() + [0.1, 1, 2, 3, 5][failures], execute: work)
     }
-    func setSpeechOutput(_ active: Bool) {
-        guard speaking != active else { return }
+    func setSpeechOutput(_ active: Bool, failed: Bool = false) {
+        guard speaking != active || active else { return }
         speaking = active
+        conversation.speech(starting: active, at: ProcessInfo.processInfo.systemUptime, failed: failed)
+        speechTimeout?.cancel()
+        if active {
+            let work = DispatchWorkItem { [weak self] in self?.setSpeechOutput(false, failed: true) }
+            speechTimeout = work; DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work)
+        }
         logger.info("Salida de voz: \(active)")
         guard isListening else { return }
-        if active { silence?.cancel(); status = "Leyendo · puedes decir tu nombre de activación y «silencio»" }
+        if active { phraseDuringSpeech = true; input.cancel(); silence?.cancel(); recognized = ""; status = "Leyendo · puedes decir tu nombre de activación y «silencio»" }
         else { scheduleRestart(failed: false) }
     }
     private func recoverCapture() {

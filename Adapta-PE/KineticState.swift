@@ -22,10 +22,17 @@ struct KineticState {
     private var armed = false
     private var safe = false
     private var targetID: String?
-    var deadRadius: Double { tremor ? 0.07 : 0.045 }
-    var attractionRadius: Double { deadRadius + 0.02 }
+    private var pendingTarget: (id: String, since: Double)?
+    var deadRadius: Double { tremor ? KineticDefaults.zonaMuertaTemblor : KineticDefaults.zonaMuerta }
+    var attractionRadius: Double { deadRadius + KineticDefaults.margenAtraccion }
 
-    mutating func cancelClick() { armSince = nil; dwellSince = nil; armed = false; progress = 0; targetID = nil; safe = false }
+    mutating func cancelClick() { cancelFixation(); armSince = nil; armed = false; safe = false }
+    /// Reinicia el dwell sin desarmar (señal o puño en curso).
+    mutating func cancelFixation() { dwellSince = nil; progress = 0; targetID = nil; pendingTarget = nil }
+    /// Centra el suavizado: un cambio de entrada (señal, puño) no se lee como movimiento.
+    mutating func recenter() { smooth = CGPoint(x: 0.5, y: 0.5); velocity = .zero; if let origin { history = [origin, origin] } }
+    /// Puño deliberado: arma el dwell sin exigir salir de la zona segura.
+    mutating func armRest() { guard origin != nil else { return }; cancelFixation(); armed = true }
     mutating func calibrate() {
         velocity = .zero
         origin = fixedCenter ? CGPoint(x: 0.5, y: 0.5) : nil; samples.removeAll(keepingCapacity: true); history.removeAll(keepingCapacity: true)
@@ -67,30 +74,37 @@ struct KineticState {
         let rawY = (filtered.y - origin.y) * aspect / amplitude
         let rawDistance = hypot(rawX, rawY)
         let dt = min(max(interval, 0), 0.25)
-        let alpha = 1 - exp(-dt / (tremor ? 0.18 : rawDistance > attractionRadius + 0.025 ? 0.05 : 0.10))
-        smooth.x += (0.5 + rawX - smooth.x) * alpha
-        smooth.y += (0.5 + rawY - smooth.y) * alpha
+        let alpha = 1 - exp(-dt / (tremor ? KineticDefaults.emaTemblor : rawDistance > attractionRadius + 0.025 ? KineticDefaults.emaLejos : KineticDefaults.emaCerca))
+        // Extremidades: volver dentro de la zona muerta centra la EMA sin avance residual.
+        if fixedCenter, rawDistance <= deadRadius { smooth = CGPoint(x: 0.5, y: 0.5) }
+        else { smooth.x += (0.5 + rawX - smooth.x) * alpha; smooth.y += (0.5 + rawY - smooth.y) * alpha }
         let dx = smooth.x - 0.5, dy = smooth.y - 0.5
         let distance = hypot(dx, dy)
         let radius = deadRadius + (safe ? 0.008 : 0)
         safe = distance <= radius && rawDistance <= radius + 0.025
         if safe {
             armSince = nil
-            guard armed, dwellEnabled, let target else { dwellSince = nil; progress = 0; return (.zero, false) }
-            if targetID != target { targetID = target; dwellSince = time }
-            progress = min(1, (time - (dwellSince ?? time)) / max(0.4, dwellDuration))
+            guard armed, dwellEnabled, let target else { cancelFixation(); return (.zero, false) }
+            // Histéresis de identidad: otra celda u otro hash AX sólo reinicia el dwell si se mantiene.
+            if targetID == nil { targetID = target; dwellSince = time; pendingTarget = nil }
+            else if targetID != target {
+                if pendingTarget?.id != target { pendingTarget = (target, time) }
+                if let pending = pendingTarget, time - pending.since >= KineticDefaults.cambioObjetivo { targetID = target; dwellSince = pending.since; pendingTarget = nil }
+            } else { pendingTarget = nil }
+            progress = min(1, (time - (dwellSince ?? time)) / min(KineticDefaults.dwellMaximo, max(KineticDefaults.dwellMinimo, dwellDuration)))
             if progress >= 1 { cancelClick(); return (.zero, true) }
             return (.zero, false)
         }
-        dwellSince = nil; progress = 0; targetID = nil
+        cancelFixation()
         if rawDistance > attractionRadius && distance > attractionRadius {
             if armSince == nil { armSince = time }
-            if time - (armSince ?? time) >= 0.18 { armed = true }
+            if time - (armSince ?? time) >= KineticDefaults.armado { armed = true }
         } else { armSince = nil }
         guard distance > 0, hypot((point.x - origin.x) / amplitude, (point.y - origin.y) * aspect / amplitude) > deadRadius else { return (.zero, false) }
         let advance = max(0, distance - deadRadius)
-        let speed = distance <= attractionRadius ? 24 * pow(advance / (attractionRadius - deadRadius), 2) : min(480, 24 + pow((distance - attractionRadius) * 6, 1.6) * 160)
-        let rate = min(tremor ? 240 : 600, speed * sensitivity)
+        let maximum = tremor ? KineticDefaults.velocidadMaximaTemblor : KineticDefaults.velocidadMaxima
+        let speed = distance <= attractionRadius ? 24 * pow(advance / (attractionRadius - deadRadius), 2) : min(maximum, 24 + pow((distance - attractionRadius) * 6, 1.6) * 160)
+        let rate = min(maximum, speed * sensitivity)
         velocity = CGPoint(x: dx / distance * rate, y: dy / distance * rate)
         let step = rate * dt
         return (CGPoint(x: dx / distance * step, y: dy / distance * step), false)

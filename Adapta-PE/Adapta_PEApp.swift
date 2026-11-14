@@ -6,38 +6,11 @@ import CoreServices
 import AVFoundation
 import Speech
 
-enum PanelCorner: String, CaseIterable {
-    case upperLeft, upperRight, lowerLeft, lowerRight
-    var title: String {
-        switch self {
-        case .upperLeft: return "Superior izquierda"
-        case .upperRight: return "Superior derecha"
-        case .lowerLeft: return "Inferior izquierda"
-        case .lowerRight: return "Inferior derecha"
-        }
-    }
-    func frame(size: CGSize, visible screen: CGRect, free: CGPoint? = nil, reservedHeight: CGFloat = 0) -> CGRect {
-        let visible = CGRect(x: screen.minX, y: screen.minY, width: screen.width, height: max(1, screen.height - reservedHeight))
-        let margin: CGFloat = 16
-        let width = min(size.width, max(1, visible.width - margin * 2))
-        let height = min(size.height, max(1, visible.height - margin * 2))
-        let left = self == .upperLeft || self == .lowerLeft
-        let upper = self == .upperLeft || self == .upperRight
-        if let free {
-            let x = free.x.isFinite ? min(1, max(0, free.x)) : 0.5
-            let y = free.y.isFinite ? min(1, max(0, free.y)) : 0.5
-            return CGRect(x: visible.minX + x * max(0, visible.width - width), y: visible.minY + y * max(0, visible.height - height), width: width, height: height)
-        }
-        return CGRect(x: left ? visible.minX + margin : visible.maxX - margin - width,
-                      y: upper ? visible.maxY - margin - height : visible.minY + margin,
-                      width: width, height: height)
-    }
-}
-
 @main
 struct Adapta_PEApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var model = AppModel.shared
+    @ObservedObject private var textos = Textos.shared
     var body: some Scene {
         Window("Adapta PE", id: "settings") {
             ContentView(model: model)
@@ -47,20 +20,21 @@ struct Adapta_PEApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Detener todos los módulos") { model.stopAll() }.keyboardShortcut(".", modifiers: [.command, .shift])
-                Button("Mostrar panel flotante") { model.showFloating() }
+                Button(textos.t("menu.detenerModulos")) { model.stopAll() }.keyboardShortcut(".", modifiers: [.command, .shift])
+                Button(textos.t("menu.mostrarFlotante")) { model.showFloating() }
             }
         }
         MenuBarExtra("Adapta PE", systemImage: "figure.roll") {
-            Button("Abrir ajustes") { model.showSettings() }
-            Button(model.floatingVisible ? "Ocultar panel flotante" : "Mostrar panel flotante") { model.floatingVisible ? model.hideFloating() : model.showFloating() }
+            Button(textos.t("menu.abrirAjustes")) { model.showSettings() }
+            Button(textos.t("menu.tutorial")) { model.showTutorial() }
+            Button(model.floatingVisible ? textos.t("menu.ocultarFlotante") : textos.t("menu.mostrarFlotante")) { model.floatingVisible ? model.hideFloating() : model.showFloating() }
             Divider()
-            Button(model.tracker.isTracking ? "Apagar cursor" : "Activar cursor") { model.toggleTracking() }
-            Button(model.voice.isListening ? "Apagar voz" : "Activar voz") { model.toggleVoice() }
-            Button(model.tracker.isPaused ? "Reanudar cursor" : "Pausar cursor") { model.tracker.isPaused.toggle() }
-            Button("Detener todo") { model.stopAll() }
+            Button(model.tracker.isTracking ? textos.t("menu.apagarCursor") : textos.t("menu.activarCursor")) { model.toggleTracking() }
+            Button(model.voice.isListening ? textos.t("menu.apagarVoz") : textos.t("menu.activarVoz")) { model.toggleVoice() }
+            Button(model.tracker.isPaused ? textos.t("menu.reanudarCursor") : textos.t("menu.pausarCursor")) { model.tracker.isPaused.toggle() }
+            Button(textos.t("menu.detenerTodo")) { model.stopAll() }
             Divider()
-            Button("Salir de Adapta PE") { model.stopAll(remember: false); NSApp.terminate(nil) }.keyboardShortcut("q")
+            Button(textos.t("menu.salir")) { model.stopAll(remember: false); NSApp.terminate(nil) }.keyboardShortcut("q")
         }
     }
 }
@@ -85,12 +59,24 @@ final class AppModel: ObservableObject {
     @Published var previewVisible = UserDefaults.standard.object(forKey: "PanelPreview") as? Bool ?? true {
         didSet { UserDefaults.standard.set(previewVisible, forKey: "PanelPreview"); positionFloating() }
     }
+    @Published var controlScale: ControlScale = {
+        let saved = UserDefaults.standard.double(forKey: "ControlScale")
+        if saved == 1.25 { return .medium }
+        if saved == 1.5 { return .large }
+        return .normal
+    }() {
+        didSet {
+            UserDefaults.standard.set(controlScale.rawValue, forKey: "ControlScale")
+            positionFloating()
+        }
+    }
     @Published var accessibilityGranted = AXIsProcessTrusted()
     @Published var screenGranted = CGPreflightScreenCaptureAccess()
     @Published var loginEnabled = SMAppService.mainApp.status == .enabled
     @Published var notice = ""
     @Published var screens = NSScreen.screens
     var settingsWindow: NSWindow? { didSet { settingsWindow?.level = colorFilter.selected == .ninguno ? .normal : .statusBar } }
+    private var tutorialWindow: NSWindow?
     private var floatingPanel: NSPanel?
     private(set) var launchedAtLogin = false
     private var settingsRequested = false
@@ -108,21 +94,43 @@ final class AppModel: ObservableObject {
         mascot.movePanel = { [weak self] in self?.moveFloating($0) }
         mascot.savePanel = { [weak self] in self?.saveFloatingPosition() }
         mascot.nextPanelScreen = { [weak self] in self?.nextFloatingScreen() }
-        tracker.fetchCameras(); voice.fetchMics()
+        tracker.fetchCameras(); voice.fetchMics(); ApplicationCatalog.shared.prewarm()
         Publishers.MergeMany(tracker.$isTracking.map { _ in () }.eraseToAnyPublisher(), tracker.$isPaused.map { _ in () }.eraseToAnyPublisher(), voice.$isListening.map { _ in () }.eraseToAnyPublisher(), voice.$isStarting.map { _ in () }.eraseToAnyPublisher(), tracker.$isStarting.map { _ in () }.eraseToAnyPublisher()).sink { [weak self] in self?.objectWillChange.send() }.store(in: &stateObservers)
         talkBack.$isEnabled.dropFirst().sink { [weak self] enabled in if self?.suspending == false { UserDefaults.standard.set(enabled, forKey: "TalkBackActive") } }.store(in: &stateObservers)
         filterObserver = colorFilter.$selected.sink { [weak self] selected in self?.settingsWindow?.level = selected == .ninguno ? .normal : .statusBar }
         actions.kineticAction = { [weak self] in self?.tracker.action($0) }
         actions.speechReading = { [weak self] in self?.mascot.react("idle"); self?.mascot.prepareSpeech(reading: $0) }
-        actions.speechOutput = { [weak self] in self?.voice.setSpeechOutput($0); self?.mascot.speaking($0) }
+        actions.speechOutput = { [weak self] active, failed in self?.voice.setSpeechOutput(active, failed: failed); self?.mascot.speaking(active) }
         actions.appAction = { [weak self] in self?.appAction($0) }
-        voice.onWake = { [weak self] in self?.actions.callar(); self?.mascot.react("phone") }
-        voice.onCommand = { [weak self] text in
-            self?.actions.procesarIntencion(text)
+        actions.targetsSelf = { [weak self] in self?.tutorialWindow?.isKeyWindow == true }
+        // Los títulos de ventana también siguen el idioma elegido en vivo.
+        Textos.shared.$currentLanguage.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
+            self?.tutorialWindow?.title = Textos.t("tutorial.tituloVentana"); self?.floatingPanel?.title = Textos.t("panel.tituloVentana")
+        }.store(in: &stateObservers)
+        actions.onResult = { [weak self] result in
+            switch result {
+            case .ok: self?.mascot.happy()
+            case .unknown, .failure: self?.mascot.confused()
+            case .confirming: break
+            }
         }
+        voice.onWake = { [weak self] in self?.actions.callar(); self?.mascot.react("phone") }
+        voice.executeCommand = { [weak self] text, done in
+            self?.actions.execute(text) { result in
+                switch result {
+                case .ok: self?.mascot.happy()
+                case .unknown, .failure: self?.mascot.confused()
+                case .confirming: break
+                }
+                done(result)
+            }
+        }
+        // Sin nombre: elecciones abiertas; durante una confirmación, sólo «confirmo …» o cancelar.
         voice.followUpAllowed = { [weak self] in self?.actions.hasChoices == true }
+        voice.confirmationAllowed = { [weak self] in self?.actions.hasConfirmation == true }
+        voice.onConversationClose = { [weak self] in self?.actions.cancelPendingActions(); self?.actions.callar() }
         actions.showFeedback = { [weak self] in self?.showFloating() }
-        actions.$choices.sink { [weak self] choices in self?.positionFloating(choiceCount: choices.count) }.store(in: &stateObservers)
+        Publishers.CombineLatest(actions.$choices, actions.$confirmationPhrase).sink { [weak self] choices, phrase in self?.positionFloating(choiceCount: max(choices.count, phrase.isEmpty ? 0 : 3)) }.store(in: &stateObservers)
         Publishers.CombineLatest(tracker.$isTracking, tracker.$isStarting).sink { [weak self] tracking, starting in
             self?.positionFloating(cameraVisible: tracking || starting)
         }.store(in: &stateObservers)
@@ -163,7 +171,7 @@ final class AppModel: ObservableObject {
     }
     func refreshPermissions() {
         accessibilityGranted = AXIsProcessTrusted(); screenGranted = CGPreflightScreenCaptureAccess()
-        tracker.fetchCameras(); voice.fetchMics(); loginEnabled = SMAppService.mainApp.status == .enabled
+        tracker.fetchCameras(); voice.fetchMics(); ApplicationCatalog.shared.prewarm(); loginEnabled = SMAppService.mainApp.status == .enabled
         if !accessibilityGranted { tracker.stopTracking(remember: false); suspending = true; talkBack.isEnabled = false; suspending = false }
     }
     func requestAccessibility() {
@@ -193,6 +201,7 @@ final class AppModel: ObservableObject {
         if defaults.bool(forKey: "TalkBackActive"), AXIsProcessTrusted() { talkBack.isEnabled = true }
         if CGPreflightScreenCaptureAccess(), let filter = ColorFilter(rawValue: defaults.string(forKey: "ActiveColorFilter") ?? "ninguno"), filter != .ninguno { colorFilter.apply(filter) }
         if defaults.bool(forKey: "FloatingVisible") { showFloating() }
+        if !defaults.bool(forKey: "TutorialVisto") { showTutorial() }
     }
     func setLogin(_ enabled: Bool) {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; loginEnabled = SMAppService.mainApp.status == .enabled; notice = "" }
@@ -215,11 +224,31 @@ final class AppModel: ObservableObject {
         settingsWindow?.level = colorFilter.selected == .ninguno ? .normal : .statusBar
         settingsWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
+    func showTutorial() {
+        if tutorialWindow == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 680, height: 720),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = Textos.t("tutorial.tituloVentana")
+            window.minSize = NSSize(width: 580, height: 600)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: OnboardingView(model: self, isBase: true, onClose: { [weak self] in
+                self?.tutorialWindow?.orderOut(nil)
+            }))
+            window.center()
+            tutorialWindow = window
+        }
+        tutorialWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
     func showFloating(hideSettings: Bool = true) {
         if floatingScreenID.isEmpty, let screen = NSScreen.main ?? screens.first { floatingScreenID = Self.screenID(screen) }
         if floatingPanel == nil {
             let panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.title = "Adapta PE · panel"
+            panel.title = Textos.t("panel.tituloVentana")
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.level = .statusBar
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications]; panel.isMovable = false; panel.isMovableByWindowBackground = false
             panel.hidesOnDeactivate = false; panel.isReleasedWhenClosed = false
@@ -233,9 +262,14 @@ final class AppModel: ObservableObject {
     static func screenID(_ screen: NSScreen) -> String { (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue ?? "" }
     private func positionFloating(choiceCount: Int? = nil, cameraVisible: Bool? = nil) {
         guard let panel = floatingPanel, let screen = screens.first(where: { Self.screenID($0) == floatingScreenID }) ?? screens.first else { return }
-        let count = choiceCount ?? actions.choices.count
+        let count = choiceCount ?? max(actions.choices.count, actions.hasConfirmation ? 3 : 0)
         let camera = previewVisible && (cameraVisible ?? (tracker.isTracking || tracker.isStarting))
-        let size = CGSize(width: 320, height: (count == 0 ? 312 : 312 + count * 44 + 48) + (camera ? 188 : 0))
+        let scale = CGFloat(controlScale.rawValue)
+        let choices: CGFloat = count == 0 ? 312 : CGFloat(312 + count * 44 + 48)
+        let cameraHeight: CGFloat = camera ? 188 : 0
+        let baseWidth = round(320 * scale)
+        let baseHeight = round((choices + cameraHeight) * scale)
+        let size = CGSize(width: baseWidth, height: baseHeight)
         let defaults = UserDefaults.standard
         let free = defaults.bool(forKey: "FloatingFree") ? CGPoint(x: defaults.double(forKey: "FloatingX"), y: defaults.double(forKey: "FloatingY")) : nil
         let frame = floatingCorner.frame(size: size, visible: screen.visibleFrame, free: free, reservedHeight: mascot.linked && mascot.name != "ninguna" ? 164 : 0)
@@ -261,7 +295,7 @@ final class AppModel: ObservableObject {
         floatingScreenID = Self.screenID(screen)
     }
     func nextFloatingScreen() {
-        guard screens.count > 1 else { notice = "Sólo hay una pantalla conectada"; return }
+        guard screens.count > 1 else { notice = Textos.t("panel.soloUnaPantalla"); return }
         let index = screens.firstIndex(where: { Self.screenID($0) == floatingScreenID }) ?? 0
         floatingScreenID = Self.screenID(screens[(index + 1) % screens.count])
     }
@@ -275,6 +309,7 @@ final class AppModel: ObservableObject {
         }
         switch command {
         case "mostrar ajustes", "abrir adapta", "mostrar adapta": showSettings()
+        case "tutorial", "abrir tutorial", "mostrar tutorial": showTutorial()
         case "modo flotante": showFloating()
         case "ocultar adapta": hideFloating(); settingsWindow?.orderOut(nil)
         case "detener todo": stopAll()

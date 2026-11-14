@@ -42,7 +42,7 @@ final class Adapta_PETests: XCTestCase {
         defer { actions.callar(); actions.appAction = accionAnterior; actions.speechOutput = salidaAnterior }
         var accion: String?, hablando = true
         actions.appAction = { accion = $0 }
-        actions.speechOutput = { hablando = $0 }
+        actions.speechOutput = { hablando = $0; _ = $1 }
         for frase in ["para la lectura", "desactiva voz", "apaga el micrófono", "desactiva el micrófono", "por favor desactiva voz, pe"] {
             var entrada = VoiceInputState()
             let orden = entrada.consume("Computadora, " + frase, wakeWord: "computadora", time: 1, speaking: true).command
@@ -137,8 +137,9 @@ final class Adapta_PETests: XCTestCase {
         let bounded = gesture.update(point, time: 0.05, angle: .greatestFiniteMagnitude)
         XCTAssertTrue(bounded.x.isFinite && bounded.y.isFinite)
         gesture.reset()
-        _ = gesture.update(point, time: 0, angle: .pi - 0.01)
-        XCTAssertEqual(gesture.update(point, time: 0.05, angle: -.pi + 0.01).x, 0.518, accuracy: 0.000001)
+        _ = gesture.update(point, time: 0, angle: .pi - 0.05)
+        // Giro de 0,1 rad cruzando ±π: 0,1 × 0,9 = 0,09 (fuera del margen zonaMuerta + 0,004).
+        XCTAssertEqual(gesture.update(point, time: 0.05, angle: -.pi + 0.05).x, 0.59, accuracy: 0.000001)
     }
 
     func testSpanishPreparationPreservesContent() {
@@ -259,7 +260,7 @@ final class Adapta_PETests: XCTestCase {
             for _ in 0..<5 { t += 1 / fps; XCTAssertGreaterThan(gesture.update(CGPoint(x: 0.23, y: 0.7), time: t).x, 0.65) }
             t += 1 / fps; XCTAssertEqual(gesture.update(neutral, time: t), CGPoint(x: 0.5, y: 0.5))
             XCTAssertEqual(gesture.update(CGPoint(x: 0.9, y: 0.9), time: t), CGPoint(x: 0.5, y: 0.5))
-            t += 0.3; XCTAssertEqual(gesture.update(CGPoint(x: 0.9, y: 0.9), time: t), CGPoint(x: 0.5, y: 0.5)); XCTAssertTrue(gesture.resetNow)
+            t += 0.6; XCTAssertEqual(gesture.update(CGPoint(x: 0.9, y: 0.9), time: t), CGPoint(x: 0.5, y: 0.5)); XCTAssertTrue(gesture.resetNow) // >500 ms reinicia el joystick
             var state = KineticState(); state.fixedCenter = true; state.calibrate()
             XCTAssertNotNil(state.origin); XCTAssertFalse(state.update(CGPoint(x: 0.5, y: 0.5), time: 0, target: "button").click)
             state.lost(at: 2); XCTAssertEqual(state.progress, 0)
@@ -350,6 +351,26 @@ final class Adapta_PETests: XCTestCase {
         XCTAssertTrue(actions.choices.isEmpty)
         XCTAssertFalse(actions.hasChoices)
         actions.callar()
+    }
+    @MainActor func testDestructiveConfirmationCancelsWithoutExecuting() {
+        let actions = ActionManager.shared
+        defer { actions.cancelPendingActions(); actions.callar() }
+        var executed = false
+        actions.confirm(action: "Eliminar", destination: "Prueba", pid: ProcessInfo.processInfo.processIdentifier) { executed = true }
+        XCTAssertTrue(actions.hasConfirmation)
+        XCTAssertEqual(actions.confirmationPhrase, VoiceConfirmation(action: "Eliminar", destination: "Prueba", pid: 0, expiresAt: 0).phrase)
+        actions.procesarIntencion("cancelar")
+        XCTAssertFalse(actions.hasConfirmation)
+        XCTAssertTrue(actions.confirmationPhrase.isEmpty)
+        XCTAssertFalse(executed)
+        actions.confirm(action: "Eliminar", destination: "Prueba", pid: ProcessInfo.processInfo.processIdentifier) { executed = true }
+        actions.confirmationSpeechFinished(interrupted: false)
+        XCTAssertTrue(actions.hasConfirmation)
+        actions.cancelPendingActions()
+        actions.confirm(action: "Eliminar", destination: "Prueba", pid: ProcessInfo.processInfo.processIdentifier) { executed = true }
+        actions.confirmationSpeechFinished(interrupted: true)
+        XCTAssertFalse(actions.hasConfirmation)
+        XCTAssertFalse(executed)
     }
     func testCommandsPreserveDictationAndSearch() {
         XCTAssertEqual(CommandParser.parse("Computadora"), .unknown("Computadora"))
@@ -497,7 +518,7 @@ final class Adapta_PETests: XCTestCase {
         XCTAssertGreaterThan(step.x, 0)
         XCTAssertLessThan(step.x * 30, 80, "Desplazamiento pequeño exige precisión")
         for i in 120..<180 { step = state.update(CGPoint(x: 1, y: 0.5), time: Double(i) / 30, target: nil).delta }
-        XCTAssertLessThanOrEqual(step.x * 30, 481)
+        XCTAssertLessThanOrEqual(step.x * 30, KineticDefaults.velocidadMaxima + 1)
     }
 
     @MainActor

@@ -1,6 +1,7 @@
 import Combine
 import AppKit
 import ApplicationServices
+import OSLog
 
 final class DesktopAccess {
     static let eventTag: Int64 = 0x41445045
@@ -13,6 +14,11 @@ final class DesktopAccess {
     private var token: Int { cancellationLock.withLock { generation } }
     private var selected: AXUIElement?
     private var selectedPID: pid_t = 0
+    private var selectedWindow: AXUIElement?
+    private var cachedRoot: AXUIElement?
+    private var cachedControls: [AXUIElement] = []
+    private var cachedAt = 0.0
+    private let signposter = OSSignposter(subsystem: "pe.adapta.desktop", category: "AX")
     private var highlight: NSPanel?
     private let system = AXUIElementCreateSystemWide()
 
@@ -39,10 +45,16 @@ final class DesktopAccess {
         guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent), point.x.isFinite, point.y.isFinite, extent.width.isFinite, extent.height.isFinite, extent.width > 0, extent.height > 0 else { return nil }
         return CGRect(origin: point, size: extent)
     }
-    static func label(_ element: AXUIElement) -> String {
+    static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSearchField"]
+    /// `includeTextValue` en false (TalkBack) no lee lo escrito en campos de texto: sólo una petición explícita lo lee.
+    static func label(_ element: AXUIElement, includeTextValue: Bool = true) -> String {
         guard value(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return "Campo protegido" }
-        let attributes = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXValueAttribute]
+        let attributes = labelAttributes(role: value(element, kAXRoleAttribute) as? String, includeTextValue: includeTextValue)
         return attributes.compactMap { value(element, $0) as? String }.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { String($0.prefix(500)) } ?? ""
+    }
+    static func labelAttributes(role: String?, includeTextValue: Bool) -> [String] {
+        let isText = textRoles.contains(role ?? "")
+        return [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] + (isText && !includeTextValue ? ["AXPlaceholderValue"] : [kAXValueAttribute])
     }
     static func surfaceIdentity(at point: CGPoint, windows: [[String: Any]], pid: pid_t) -> String? {
         guard point.x.isFinite, point.y.isFinite, pid > 0 else { return nil }
@@ -64,7 +76,9 @@ final class DesktopAccess {
             if pid > 0, let role, ![kAXWindowRole, kAXApplicationRole, kAXUnknownRole].contains(role), value(target, kAXEnabledAttribute) as? Bool != false {
                 let roles = [kAXButtonRole, kAXCheckBoxRole, kAXRadioButtonRole, kAXPopUpButtonRole, kAXTextFieldRole]
                 let center = roles.contains(role) ? frame(target).map { CGPoint(x: $0.midX, y: $0.midY) } : nil
-                return ("\(pid):\(CFHash(target))", center)
+                // Identidad estable por control (rol y marco): el hash AX cambia en apps que recrean elementos.
+                let identity = frame(target).map { "\(pid):\(role):\(Int($0.minX)):\(Int($0.minY)):\(Int($0.width)):\(Int($0.height))" } ?? "\(pid):\(CFHash(target))"
+                return (identity, center)
             }
         }
         guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
@@ -77,8 +91,8 @@ final class DesktopAccess {
         event?.post(tap: .cghidEventTap)
     }
     static func move(to point: CGPoint) { post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)) }
-    static func click(right: Bool = false) {
-        guard AXIsProcessTrusted(), let point = CGEvent(source: nil)?.location else { return }
+    static func click(right: Bool = false, at position: CGPoint? = nil) {
+        guard AXIsProcessTrusted(), let point = position ?? CGEvent(source: nil)?.location else { return }
         post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: point, mouseButton: right ? .right : .left))
         post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: point, mouseButton: right ? .right : .left))
     }
@@ -87,9 +101,9 @@ final class DesktopAccess {
         for down in [true, false] { let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down); event?.flags = flags; post(event) }
     }
     func requirePermission() -> Bool {
-        guard AXIsProcessTrusted() else { ActionManager.shared.hablar("Activa el permiso de Accesibilidad desde Ajustes del Sistema."); return false }; return true
+        guard AXIsProcessTrusted() else { ActionManager.shared.fallar("Activa el permiso de Accesibilidad desde Ajustes del Sistema."); return false }; return true
     }
-    func cancelSelection() { cancellationLock.withLock { generation += 1 }; queue.async { self.selected = nil; self.selectedPID = 0 }; showHighlight(nil) }
+    func cancelSelection() { cancellationLock.withLock { generation += 1 }; queue.async { self.selected = nil; self.selectedPID = 0; self.selectedWindow = nil }; showHighlight(nil) }
     func cancelPendingWork() { cancellationLock.withLock { generation += 1 } }
     func run(_ command: VoiceCommand) {
         guard requirePermission() else { return }
@@ -97,6 +111,8 @@ final class DesktopAccess {
         let token = self.token
         queue.async {
             guard !self.isCancelled(token) else { return }; self.executionToken = token
+            let interval = self.signposter.beginInterval("AXCommand")
+            defer { self.signposter.endInterval("AXCommand", interval) }
             guard let appPID else { self.respond("No hay aplicación activa"); return }
             let app = AXUIElementCreateApplication(appPID); AXUIElementSetMessagingTimeout(app, 0.08)
             switch command {
@@ -104,7 +120,8 @@ final class DesktopAccess {
                 let items = self.menuItems(app)
                 let candidates: [AXUIElement] = { if case .menu(let name) = command { return self.matchingMenus(name, items: items) }; return items }()
                 guard !candidates.isEmpty else { self.respond("Esa acción no está disponible en el menú de la aplicación. Di muestra comandos o usa un atajo."); return }
-                self.pick(candidates, pid: appPID, token: token, forceChoice: command == .listActions, menuLabels: true) { self.press($0, token: token) }
+                let key: String? = { if case .menu(let name) = command { return VoiceConfirmation.known(name) }; return nil }()
+                self.pick(candidates, pid: appPID, token: token, forceChoice: command == .listActions, menuLabels: true) { self.press($0, token: token, key: key) }
             case .listFields, .writeField:
                 let fields = self.controls(app: app, fieldOnly: true)
                 if case .writeField(let text, let name) = command {
@@ -124,7 +141,7 @@ final class DesktopAccess {
                 let nsRange = NSRange(range, in: value)
                 var selectedRange = CFRange(location: nsRange.location, length: nsRange.length)
                 let success = AXValueCreate(.cfRange, &selectedRange).map { AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, $0) == .success } ?? false
-                self.respond(success ? "Texto seleccionado" : "La aplicación no permite seleccionar ese texto")
+                self.respond(success ? "Texto seleccionado" : "La aplicación no permite seleccionar ese texto", ok: success)
             case .dictate(let text): self.dictate(text, app: app, token: token)
             case .clearText:
                 guard let field = Self.element(Self.value(app, kAXFocusedUIElementAttribute)), self.editable(field), Self.value(field, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { self.respond("Enfoca un campo editable"); return }
@@ -134,19 +151,19 @@ final class DesktopAccess {
                 let candidates = self.matches(name, elements: self.controls(app: app, fieldOnly: fieldsOnly))
                 guard !candidates.isEmpty else { self.respond("No encontré un elemento visible llamado \(name)"); return }
                 self.pick(candidates, pid: appPID, token: token) { target in
-                    if case .readElement = command { self.respond(Self.label(target)); return }
+                    if case .readElement = command { self.respond(Self.label(target), ok: true); return }
                     if case .press = command { self.press(target, token: token) }
                     else if case .focus = command { _ = self.focus(target, token: token) }
-                    else { self.selected = target; self.selectedPID = appPID; self.showHighlight(Self.frame(target), token: token); self.respond("Seleccionado: \(self.controlLabel(target))") }
+                    else { self.selected = target; self.selectedPID = appPID; self.selectedWindow = Self.element(Self.value(app, kAXFocusedWindowAttribute)); self.showHighlight(Self.frame(target), token: token); self.respond("Seleccionado: \(self.controlLabel(target))") }
                 }
             case .pressSelection:
                 guard let selected = self.selected, self.selectedPID == appPID else { self.respond("Selecciona primero un elemento en la aplicación activa"); return }; self.press(selected, token: token)
             case .readScreen:
                 let root = Self.element(Self.value(app, kAXFocusedWindowAttribute)) ?? app
-                let texts = self.walk(root).map(Self.label).filter { !$0.isEmpty }
+                let texts = self.walk(root).map { Self.label($0) }.filter { !$0.isEmpty }
                 var seen = Set<String>()
                 let unique = texts.filter { seen.insert($0).inserted }
-                self.respond(unique.isEmpty ? "La aplicación no expone texto accesible. Puedes usar VoiceOver." : String(unique.joined(separator: ". ").prefix(3500)))
+                self.respond(unique.isEmpty ? "La aplicación no expone texto accesible. Puedes usar VoiceOver." : String(unique.joined(separator: ". ").prefix(3500)), ok: !unique.isEmpty)
             default: break
             }
         }
@@ -191,6 +208,7 @@ final class DesktopAccess {
         var result: [AXUIElement] = [], pending = [root], visited = Set<CFHashCode>()
         let deadline = ProcessInfo.processInfo.systemUptime + 0.8
         while let element = pending.popLast(), result.count < 1800, ProcessInfo.processInfo.systemUptime < deadline {
+            guard !isCancelled(executionToken) else { return [] }
             guard visited.insert(CFHash(element)).inserted else { continue }
             if skipSystemMenu, Self.value(element, kAXRoleAttribute) as? String == kAXMenuBarItemRole, Self.label(element) == "Apple" { continue }
             result.append(element)
@@ -202,15 +220,22 @@ final class DesktopAccess {
     }
     private func controls(app: AXUIElement, fieldOnly: Bool) -> [AXUIElement] {
         let root = Self.element(Self.value(app, kAXFocusedWindowAttribute)) ?? app
-        let bounds = Self.frame(root)
-        let elements = walk(root), deadline = ProcessInfo.processInfo.systemUptime + 0.8
-        return elements.filter {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return false }
-            guard let frame = Self.frame($0), frame.width > 0, frame.height > 0, Self.value($0, kAXEnabledAttribute) as? Bool != false else { return false }
-            guard bounds.map({ $0.intersects(frame) }) != false, Self.value($0, "AXHidden") as? Bool != true else { return false }
-            guard Self.value($0, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return false }
-            return (!fieldOnly || editable($0)) && (fieldOnly || !Self.label($0).isEmpty)
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - cachedAt < 1.5, cachedRoot.map({ CFEqual($0, root) }) == true {
+            return fieldOnly ? cachedControls.filter(editable) : cachedControls
         }
+        let bounds = Self.frame(root), elements = walk(root)
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.4
+        var controls: [AXUIElement] = []
+        for element in elements {
+            guard !isCancelled(executionToken), ProcessInfo.processInfo.systemUptime < deadline else { return [] }
+            guard let frame = Self.frame(element), Self.value(element, kAXEnabledAttribute) as? Bool != false,
+                  bounds.map({ $0.intersects(frame) }) != false, Self.value(element, "AXHidden") as? Bool != true,
+                  Self.value(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { continue }
+            if editable(element) || !Self.label(element).isEmpty { controls.append(element) }
+        }
+        cachedRoot = root; cachedControls = controls; cachedAt = ProcessInfo.processInfo.systemUptime
+        return fieldOnly ? controls.filter(editable) : controls
     }
     private func controlLabel(_ element: AXUIElement) -> String {
         if editable(element) {
@@ -229,11 +254,13 @@ final class DesktopAccess {
     private func matches(_ name: String, elements: [AXUIElement]) -> [AXUIElement] {
         let text = NameMatch.key(name)
         guard !text.isEmpty else { return [] }
-        let exact = elements.filter { NameMatch.key(controlLabel($0)) == text }
-        if !exact.isEmpty { return exact }
-        let contained = elements.filter { NameMatch.key(controlLabel($0)).contains(text) }
-        if !contained.isEmpty { return contained }
-        return NameMatch.uniqueIndex(name, names: elements.map { [controlLabel($0)] }).map { [elements[$0]] } ?? []
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.4
+        var labels: [String] = []
+        for element in elements {
+            guard !isCancelled(executionToken), ProcessInfo.processInfo.systemUptime < deadline else { return [] }
+            labels.append(controlLabel(element))
+        }
+        return VoiceSafety.menuIndices(name, labels: labels).map { elements[$0] }
     }
     // `ventana` es nil si no se verifica; `.some(nil)` indica que la app no exponía ventana enfocada y debe seguir sin exponerla.
     private func canAct(pid: pid_t, token: Int, ventana: AXUIElement?? = nil) -> Bool {
@@ -248,7 +275,7 @@ final class DesktopAccess {
         var pid: pid_t = 0; AXUIElementGetPid(field, &pid)
         guard canAct(pid: pid, token: token), editable(field), Self.value(field, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return false }
         guard AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success else { respond("La aplicación no permite enfocar ese campo"); return false }
-        selected = field; selectedPID = pid; showHighlight(Self.frame(field), token: token); respond("Campo activo: " + controlLabel(field)); return true
+        selected = field; selectedPID = pid; selectedWindow = Self.element(Self.value(AXUIElementCreateApplication(pid), kAXFocusedWindowAttribute)); showHighlight(Self.frame(field), token: token); respond("Campo activo: " + controlLabel(field)); return true
     }
     private func pick(_ elements: [AXUIElement], pid: pid_t, token: Int, forceChoice: Bool = false, menuLabels: Bool = false, offset: Int = 0, ventana: AXUIElement?? = nil, action: @escaping (AXUIElement) -> Void) {
         guard canAct(pid: pid, token: token), !elements.isEmpty else { return }
@@ -291,21 +318,61 @@ final class DesktopAccess {
         return path.joined(separator: " > ")
     }
     private func matchingMenus(_ name: String, items: [AXUIElement]) -> [AXUIElement] {
-        let aliases: [String: [String]] = ["nueva_ventana": ["Nueva ventana", "New Window", "Nueva ventana de Finder", "New Finder Window"], "nueva_pestana": ["Nueva pestaña", "New Tab"], "cerrar_ventana": ["Cerrar ventana", "Close Window", "Close"], "cerrar_pestana": ["Cerrar pestaña", "Close Tab"], "guardar": ["Guardar", "Save"], "guardar_como": ["Guardar como", "Save As"], "imprimir": ["Imprimir", "Print"]]
-        let keys = (aliases[name] ?? [name]).map(NameMatch.key)
-        let exact = items.filter { keys.contains(NameMatch.key(Self.label($0))) || (name.contains(">") && keys.contains(NameMatch.key(menuLabel($0)))) }
-        if !exact.isEmpty { return exact }
-        return matches(name, elements: items)
+        let aliases: [String: [String]] = ["nueva_ventana": ["Nueva ventana", "New Window", "Nueva ventana de Finder", "New Finder Window"], "nueva_pestana": ["Nueva pestaña", "New Tab"], "cerrar_ventana": ["Cerrar ventana", "Close Window", "Close"], "cerrar_pestana": ["Cerrar pestaña", "Close Tab"], "guardar": ["Guardar", "Save"], "guardar_como": ["Guardar como", "Save As"], "imprimir": ["Imprimir", "Print"], "silenciar_pestana": ["Silenciar pestaña", "Silenciar sitio", "Mute Tab", "Mute Site"], "activar_sonido": ["Activar sonido de pestaña", "Unmute Tab", "Unmute Site"]]
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.4
+        var labels: [String] = []
+        for item in items {
+            guard !isCancelled(executionToken), ProcessInfo.processInfo.systemUptime < deadline else { return [] }
+            labels.append(name.contains(">") ? menuLabel(item) : Self.label(item))
+        }
+        return VoiceSafety.menuIndices(name, labels: labels, aliases: aliases[name] ?? []).map { items[$0] }
     }
-    private func press(_ element: AXUIElement, token: Int) {
+    private func press(_ element: AXUIElement, token: Int, confirmed: Bool = false, key: String? = nil) {
         var pid: pid_t = 0; AXUIElementGetPid(element, &pid)
         guard canAct(pid: pid, token: token) else { return }
         guard Self.value(element, kAXEnabledAttribute) as? Bool != false else { respond("Elemento desactivado"); return }
+        let label = controlLabel(element)
+        if !confirmed, VoiceSafety.destructive(label) {
+            let app = AXUIElementCreateApplication(pid); AXUIElementSetMessagingTimeout(app, 0.08)
+            let window = Self.element(Self.value(app, kAXFocusedWindowAttribute))
+            let destination = (NSRunningApplication(processIdentifier: pid)?.localizedName ?? "aplicación") + (window.map { " ventana " + Self.label($0) } ?? "")
+            DispatchQueue.main.async {
+                guard self.canAct(pid: pid, token: token) else { return }
+                ActionManager.shared.confirm(action: key ?? label, destination: destination, pid: pid) {
+                    self.queue.async {
+                        guard self.canAct(pid: pid, token: token, ventana: window), self.controlLabel(element) == label else { return }
+                        self.press(element, token: token, confirmed: true)
+                    }
+                }
+            }
+            return
+        }
         guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { respond("La aplicación no permite activar ese elemento por Accesibilidad. Usa el cursor."); return }
-        showHighlight(nil); selected = nil
-        respond("Activado: " + controlLabel(element))
+        cachedAt = 0; showHighlight(nil); selected = nil; selectedWindow = nil
+        respond("Activado: " + label)
     }
-    private func respond(_ message: String) { let token = executionToken; DispatchQueue.main.async { if !self.isCancelled(token) { ActionManager.shared.hablar(message) } } }
+    func clickSelectionOrCursor(right: Bool = false) {
+        guard requirePermission(), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
+        let token = self.token
+        queue.async {
+            guard self.canAct(pid: pid, token: token) else { return }; self.executionToken = token
+            guard let selected = self.selected else { Self.click(right: right); return }
+            guard self.selectedPID == pid, self.canAct(pid: pid, token: token, ventana: self.selectedWindow) else { self.respond("La selección cambió. Selecciona de nuevo o cancela."); return }
+            if right {
+                guard let frame = Self.frame(selected) else { self.respond("La selección ya no está disponible"); return }
+                Self.click(right: true, at: CGPoint(x: frame.midX, y: frame.midY))
+            } else { self.press(selected, token: token) }
+        }
+    }
+    // Todo mensaje hablado que no sea un resultado (`ok`) es un fallo del turno de voz.
+    private func respond(_ message: String, ok: Bool = false) {
+        let token = executionToken
+        DispatchQueue.main.async {
+            guard !self.isCancelled(token) else { return }
+            if ["Activado:", "Seleccionado:", "Campo activo:", "Texto escrito"].contains(where: { message.hasPrefix($0) }) { ActionManager.shared.feedback(message) }
+            else if ok { ActionManager.shared.hablar(message) } else { ActionManager.shared.fallar(message) }
+        }
+    }
     func showHighlight(_ frame: CGRect?, token: Int? = nil) {
         DispatchQueue.main.async {
             if let token, self.isCancelled(token) { return }
@@ -341,55 +408,6 @@ final class DesktopAccess {
             }
             let success = AXValueCreate(.cgPoint, &position).map { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, $0) == .success } ?? false
             DispatchQueue.main.async { if !self.isCancelled(token) { completion(success, !success) } }
-        }
-    }
-}
-
-final class TalkBackManager: ObservableObject {
-    @Published var isEnabled = false { didSet { configure() } }
-    private var monitors: [Any] = []
-    private var pending: DispatchWorkItem?
-    private var generation = 0
-    private var current: AXUIElement?
-    private let queue = DispatchQueue(label: "pe.adapta.talkback", qos: .utility)
-    deinit { monitors.forEach(NSEvent.removeMonitor); pending?.cancel() }
-    private func configure() {
-        generation += 1; pending?.cancel(); current = nil
-        monitors.forEach(NSEvent.removeMonitor); monitors.removeAll()
-        if !isEnabled { DesktopAccess.shared.showHighlight(nil); return }
-        guard AXIsProcessTrusted() else { isEnabled = false; ActionManager.shared.hablar("TalkBack necesita Accesibilidad"); return }
-        let receive: (NSEvent) -> Void = { [weak self] event in self?.hover(event.cgEvent?.location ?? CGEvent(source: nil)?.location ?? .zero) }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: receive) { monitors.append(global) }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { event in receive(event); return event }) { monitors.append(local) }
-    }
-    private var lookupInFlight = false
-    private var latestPoint = CGPoint.zero
-    private func hover(_ point: CGPoint) {
-        latestPoint = point
-        guard !lookupInFlight else { return }
-        lookupInFlight = true
-        let token = generation
-        queue.async { [weak self] in
-            let target = DesktopAccess.at(point)
-            let label = target.map(DesktopAccess.label) ?? ""
-            let frame = target.flatMap(DesktopAccess.frame)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.lookupInFlight = false
-                guard self.isEnabled, token == self.generation else { return }
-                // Recuperar el último movimiento sin acumular consultas AX.
-                if hypot(self.latestPoint.x - point.x, self.latestPoint.y - point.y) > 2 { self.hover(self.latestPoint) }
-                if let current = self.current, let target, CFEqual(current, target) { return }
-                self.pending?.cancel(); self.current = target
-                DesktopAccess.shared.showHighlight(frame)
-                guard let target, !label.isEmpty else { return }
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self, self.isEnabled, token == self.generation, let current = self.current, CFEqual(current, target) else { return }
-                    ActionManager.shared.speechReading?(true)
-                    ActionManager.shared.hablar(label)
-                }
-                self.pending = work; DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
-            }
         }
     }
 }

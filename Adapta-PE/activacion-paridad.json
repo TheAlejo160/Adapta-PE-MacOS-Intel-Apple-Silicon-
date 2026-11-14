@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "activacion": [
+    { "nombre": "Jarvis", "texto": "yarbis abre YouTube", "activa": true, "canonica": "abre YouTube", "intencion": "buscar_inteligente", "sitio": "youtube" },
+    { "nombre": "Jarvis", "texto": "Jar vis abre YouTube", "activa": true },
+    { "nombre": "Jarvis", "texto": "bonito cierra la pestaña", "activa": false },
+    { "nombre": "Julia", "texto": "yulia abre YouTube", "activa": false },
+    { "nombre": "Alexa", "texto": "aleksa abre YouTube", "activa": true },
+    { "nombre": "Siri", "texto": "siri abre YouTube", "activa": true },
+    { "nombre": "Siri", "texto": "ciri abre YouTube", "activa": false },
+    { "nombre": "Max", "texto": "mas abre YouTube", "activa": false },
+    { "nombre": "Mike", "alias": ["maik"], "texto": "maik abre YouTube", "activa": true },
+    { "nombre": "George", "alias": ["yorch"], "texto": "yorch abre YouTube", "activa": true },
+    { "nombre": "Hey Google", "alias": ["ei gugol"], "texto": "ei gugol abre YouTube", "activa": true },
+    { "nombre": "Wayra", "alias": ["guaira"], "texto": "guaira abre YouTube", "activa": true },
+    { "nombre": "Killa", "texto": "kiya abre YouTube", "activa": false },
+    { "nombre": "Qori", "alias": ["kori"], "texto": "kori abre YouTube", "activa": true },
+    { "nombre": "Jarvis", "texto": "busca Jarvis en Wikipedia", "activa": false },
+    { "nombre": "Jarvis", "texto": "Computadora abre YouTube", "activa": false },
+    { "nombre": "Jarvis", "tambienComputadora": true, "texto": "Computadora abre YouTube", "activa": true },
+    { "nombre": "Jarvis", "tambienComputadora": true, "idioma": "en-US", "texto": "Computer open YouTube", "activa": true },
+    { "nombre": "Jarvis", "texto": "oye, Jarvis abre YouTube", "activa": true },
+    { "nombre": "Jarvis", "texto": "no Jarvis abre YouTube", "activa": false },
+    { "nombre": "Hey Google", "texto": "Hey Google abre YouTube", "activa": true },
+    { "nombre": "Killa", "texto": "kila abre YouTube", "activa": false },
+    { "nombre": "Peña", "texto": "pena abre YouTube", "activa": false },
+    { "nombre": "Lucía", "texto": "lusia abre YouTube", "activa": true },
+    { "nombre": "Jarvis", "idioma": "en-US", "texto": "please Jarvis open YouTube", "activa": true },
+    { "nombre": "", "alias": ["Jarvis"], "texto": "Jarvis abre YouTube", "activa": true, "nota": "alias con el nombre predeterminado" },
+    { "nombre": "", "alias": ["Jarvis"], "texto": "Computadora abre YouTube", "activa": true },
+    { "nombre": "João", "texto": "Joao abre YouTube", "activa": true, "nota": "cualquier marca vocálica se neutraliza" },
+    { "nombre": "Jarvis", "texto": "oye Jarvis abre YouTube", "esperando": true, "activa": true, "canonica": "abre YouTube", "nota": "vocativo también tras el pitido o en conversación" }
+  ],
+  "tolerancia": [
+    { "idioma": "es", "texto": "buscqr Perú en YouTube", "corregida": "buscar Perú en YouTube", "repetir": false, "intencion": "buscar_inteligente", "query": "Perú", "sitio": "youtube" },
+    { "idioma": "en", "texto": "searxh Peru on YouTube", "corregida": "search Peru on YouTube", "repetir": false, "intencion": "buscar_inteligente", "query": "Peru", "sitio": "youtube" },
+    { "idioma": "es", "texto": "recqrga", "corregida": "recarga", "repetir": false, "intencion": "recargar" },
+    { "idioma": "es", "texto": "cierqa ventana", "corregida": null, "repetir": true },
+    { "idioma": "en", "texto": "closse window", "corregida": null, "repetir": true },
+    { "idioma": "es", "texto": "limpiad el campo", "corregida": null, "repetir": true },
+    { "idioma": "es", "texto": "borra texto", "corregida": null, "repetir": false },
+    { "idioma": "es", "texto": "busca cierqa ventana", "corregida": null, "repetir": false },
+    { "idioma": "es", "texto": "puscar gatos", "corregida": null, "repetir": false, "nota": "ambiguo: buscar a 1, pulsar a 2" },
+    { "idioma": "es", "texto": "bisca gatos", "corregida": null, "repetir": false, "nota": "a 2 ediciones de buscar: no se corrige" },
+    { "idioma": "es", "texto": "abrr YouTube", "corregida": null, "repetir": false, "nota": "menos de 5 letras" }
+  ],
+  "sitios": [
+    { "idioma": "es", "texto": "abre yutub", "sitio": "youtube", "anuncio": "Abriendo youtube.com." },
+    { "idioma": "es", "texto": "abre amason", "sitio": "amazon", "anuncio": "Abriendo amazon.com." },
+    { "idioma": "es", "texto": "abre facebuk", "sitio": null },
+    { "idioma": "en", "texto": "abre yutub", "sitio": null }
+  ],
+  "confirmacion": [
+    { "texto": "cierra esta pestaña", "accion": "cerrar_pestana", "resultado": "confirmando", "destino": { "windowId": 7, "tabId": 10, "tabIds": [10] }, "caducidadMs": 8000, "plazoDesde": "fin_tts" },
+    { "texto": "cierra las otras pestañas", "accion": "cerrar_otras", "resultado": "confirmando", "destino": { "windowId": 7, "tabId": 10, "tabIds": [11, 12] }, "caducidadMs": 8000, "plazoDesde": "fin_tts" },
+    { "texto": "cierra ventana", "accion": "cerrar_ventana", "resultado": "confirmando", "destino": { "windowId": 7 }, "caducidadMs": 8000, "plazoDesde": "fin_tts" }
+  ],
+  "cancelacion": [
+    { "idioma": "es-PE", "texto": "cancelar" }, { "idioma": "en-US", "texto": "cancel" }, { "idioma": "pt-BR", "texto": "cancela" },
+    { "idioma": "de-DE", "texto": "abbrechen" }, { "idioma": "fr-FR", "texto": "annuler" }, { "idioma": "it-IT", "texto": "annulla" }
+  ],
+  "conversacion": [
+    { "resultado": "ok", "modo": true, "tts": "end", "renueva": true },
+    { "resultado": "fallo", "modo": true, "tts": "end", "renueva": false },
+    { "resultado": "desconocida", "modo": true, "tts": "end", "renueva": false },
+    { "resultado": "confirmando", "modo": true, "tts": "end", "renueva": false },
+    { "resultado": "ok", "modo": false, "tts": "end", "renueva": false },
+    { "resultado": "ok", "modo": true, "tts": "error", "renueva": false }
+  ],
+  "cierres": ["gracias", "listo", "silencio"],
+  "contenido": ["busca gracias", "escribe listo", "busca silencio en YouTube"]
+}

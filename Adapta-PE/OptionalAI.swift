@@ -89,10 +89,10 @@ final class OptionalAI: ObservableObject {
     func cancel() { generation += 1; task?.cancel(); task = nil; if isBusy { status = "Consulta cancelada" }; isBusy = false }
     func ask(_ text: String) { send(content: text) }
     private func validate() -> (URL, String)? {
-        guard isEnabled else { ActionManager.shared.hablar("La IA opcional está desactivada"); return nil }
-        guard let url = Self.compatibleEndpoint(endpoint) else { ActionManager.shared.hablar("Configura un endpoint HTTPS válido"); return nil }
+        guard isEnabled else { ActionManager.shared.fallar("La IA opcional está desactivada"); return nil }
+        guard let url = Self.compatibleEndpoint(endpoint) else { ActionManager.shared.fallar("Configura un endpoint HTTPS válido"); return nil }
         let key = readKey()
-        guard !key.isEmpty, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { ActionManager.shared.hablar("Guarda tu API key y el modelo del proveedor en Ajustes"); return nil }
+        guard !key.isEmpty, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { ActionManager.shared.fallar("Guarda tu API key y el modelo del proveedor en Ajustes"); return nil }
         return (url, key)
     }
     private func send(content: Any) {
@@ -111,12 +111,12 @@ final class OptionalAI: ObservableObject {
             switch outcome {
             case .failure(let error):
                 self.status = (error as? URLError)?.code == .dataLengthExceedsMaximum ? "Respuesta del proveedor demasiado grande" : "Conexión fallida"
-                ActionManager.shared.hablar(self.status)
+                ActionManager.shared.fallar(self.status)
             case .success(let (data, http)):
-                guard (200..<300).contains(http.statusCode) else { self.status = "El proveedor devolvió HTTP \(http.statusCode). Revisa clave, modelo y cuota."; ActionManager.shared.hablar(self.status); return }
+                guard (200..<300).contains(http.statusCode) else { self.status = "El proveedor devolvió HTTP \(http.statusCode). Revisa clave, modelo y cuota."; ActionManager.shared.fallar(self.status); return }
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let choices = json["choices"] as? [[String: Any]], let message = choices.first?["message"] as? [String: Any], let text = message["content"] as? String, !text.isEmpty else {
-                    self.status = "Respuesta incompatible con chat/completions"; ActionManager.shared.hablar(self.status); return
+                    self.status = "Respuesta incompatible con chat/completions"; ActionManager.shared.fallar(self.status); return
                 }
                 self.status = "Respuesta recibida"; ActionManager.shared.hablar(String(text.prefix(6000)))
             }
@@ -140,7 +140,7 @@ final class OptionalAI: ObservableObject {
     }
     func analyzeScreen() {
         guard validate() != nil, !isBusy else { return }
-        guard allowScreenUpload else { ActionManager.shared.hablar("Autoriza el envío de pantalla en IA opcional antes de usar este comando"); return }
+        guard allowScreenUpload else { ActionManager.shared.fallar("Autoriza el envío de pantalla en IA opcional antes de usar este comando"); return }
         let tokenAntesDelConsentimiento = generation
         let consentimiento = NSAlert()
         consentimiento.messageText = "Enviar el monitor principal completo"

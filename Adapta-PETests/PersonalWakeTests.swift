@@ -1,7 +1,21 @@
 import XCTest
+#if canImport(Adapta_PE)
 @testable import Adapta_PE
+#endif
 
 final class PersonalWakeTests: XCTestCase {
+    @MainActor func testWakeNameSaveRejectsInvalidInputAndRestoresDefault() {
+        let defaults = UserDefaults.standard, previous = UserDefaults.standard.object(forKey: "WakeWord")
+        defer { defaults.set(previous, forKey: "WakeWord") }
+        let voice = VoiceManager()
+        XCTAssertNil(voice.saveWakeName("  Jarvis  "))
+        XCTAssertEqual(voice.wakeName, "Jarvis")
+        XCTAssertNotNil(voice.saveWakeName("close"))
+        XCTAssertEqual(defaults.string(forKey: "WakeWord"), "Jarvis")
+        XCTAssertNil(voice.saveWakeName(WakeName.defaultName))
+        XCTAssertEqual(voice.wakeName, "Computadora")
+        XCTAssertEqual(WakeName.saved, "Computadora")
+    }
     func testCameraDefaultAndDisconnectedSelection() {
         XCTAssertEqual(TrackingManager.validatedCameraID("", available: ["usb", "integrada"]), "")
         XCTAssertEqual(TrackingManager.validatedCameraID("usb", available: ["integrada", "usb"]), "usb")

@@ -1,5 +1,50 @@
 # Adapta PE para macOS: análisis y portabilidad
 
+## UX · Ola 3B · 21 de octubre de 2026
+
+- **T-01 Tutorial práctico** (`OnboardingView.swift`, `OnboardingModel.swift`):
+  - Secuencia idéntica al catálogo `tutorial` (8 pasos en Base, 7 en Lite con exclusión de `cursor`).
+  - Asistente de permisos con estado individual (micrófono, reconocimiento de voz, accesibilidad, grabación de pantalla con aviso de que exige reiniciar la app, y cámara sólo en Base).
+  - Ensayo del nombre de activación con «Probar nombre» y respuesta de confirmación por voz TTS.
+  - Ejercicios interactivos de 3 órdenes guiadas: «baja», «selecciona Siguiente» y «dale clic».
+  - Selección de filtro con muestras de color y texto «Sólo un filtro a la vez».
+  - Práctica de dwell con 3 botones de objetivo (≥44 pt), explicación clara de pinza, boca y puño, y aclaración explícita de que NO hay parpadeo de ojos para evitar disparos accidentales.
+  - Primera ejecución abre el tutorial automáticamente (`TutorialVisto` en UserDefaults); reabrible mediante botón «Tutorial» en ajustes/panel flotante/barra de menú y orden de voz «tutorial» en los 6 idiomas.
+- **T-10 Filtros con muestras** (`ColorFilterManager.swift`, `ContentView.swift`):
+  - Reemplazo del `Picker` por `ColorFilterSelectionView` con muestra visual de color por grupo (todos, rojo-verde, azul-amarillo, grises) y el texto explicativo «Sólo un filtro a la vez».
+  - Persistencia bajo `"ActiveColorFilter"`.
+- **T-15 Tamaño y escala de controles** (`OnboardingModel.swift`, `Adapta_PEApp.swift`, `ContentView.swift`):
+  - Preferencia persistente `ControlScale` (100 %, 125 %, 150 %) en `"ControlScale"`.
+  - Panel flotante con ancho dinámico adaptado (320 pt, 400 pt, 480 pt), no fijo a 320 pt.
+  - Aplicación de `.controlSize` y dimensiones adaptables en vistas principales.
+
+## Voz · Ola 2 (contrato 1A) · 21 de octubre de 2026
+
+- **Activación** (`VoiceActivation`, `WakeName`): literal, perfil español (≥5 letras), tabla cerrada de pronunciaciones y hasta 3 alias. Vocativos en cualquier estado y «Hey Google» como compuesto. Los alias también activan con «Computadora». `TambienComputadora` y `ModoConversacion` (UserDefaults) están desactivados por defecto. Nombre, alias y pronunciaciones van a `contextualStrings`.
+- **Probar nombre** (Ajustes): la siguiente frase se muestra sin ejecutarse. Caduca a los 15 s con aviso y la tarea Speech se reinicia para descartar los resultados tardíos. Después ofrece «Añadir como alias».
+- **Confirmación**: «cierra esta pestaña/ventana», «cierra las otras pestañas» y cualquier menú destructivo piden «<verbo> <acción>» del catálogo (por ejemplo, «confirmo cerrar esta pestaña»). El destino (PID, ventana y etiqueta o pestañas) se fija y se revalida, pero no se pronuncia. Los 8 s empiezan al terminar la pregunta. Sin nombre, sólo pasan «confirmo …» o una cancelación, que anula sin apagar el micrófono.
+- **Conversación** (`VoiceConversation`): `ActionManager.execute` informa del resultado (ok, fallo, desconocida o confirmando), y los fallos asíncronos de AX o AppleScript lo corrigen. Se renuevan 8 s sólo tras un ok y el fin del TTS, aunque el inicio del TTS llegue después. Una lectura posterior ajena no renueva. «gracias», «listo» y «silencio» cierran sólo como frase independiente. Las frases empezadas durante el TTS se descartan, y un TTS sin fin se libera a los 60 s.
+- **Tolerancia** (`VoiceTolerance`): sólo cuando el parser da `.unknown`, una vez y con un único token. Anuncia «Entendí: …». Si la orden se acerca a una destructiva, sólo pide repetirla. Los sitios tolerantes («abre yutub») se usan únicamente si no existe una app con ese nombre, y anuncian «Abriendo youtube.com.».
+- **Pruebas**: `CatalogParityTests.testActivationParityFixture` consume todos los casos de `activacion-paridad.json`. Suite Xcode: 55 tests y 0 fallos. Catálogo b734909c (incluye `tutorial`, que se ignora hasta la 3B). Pendiente: comprobarlo con micrófono, TTS y AX reales.
+
+
+## Voz · 21 de octubre de 2026
+
+| Objetivo 1C | Implementado | Comprobado en esta sesión | Pendiente |
+| --- | --- | --- | --- |
+| Catálogo validado por Decodable y SHA-256 | JSON de catálogo y ambos fixtures en recursos; verificación del manifiesto al cargar | Fuentes idénticas a la extensión; tests de integridad | Reconstruir el bundle tras la última regeneración 1A |
+| Seis idiomas | Preparación antes del parser; preferencia automática/manual; locales de Speech y TTS | 36 casos con intención y argumentos esperados | ASR y voces físicas por idioma; interfaz aún en español |
+| Familias de §8 | Pestañas Cmd+1…9, duplicar/cerrar otras, consulta vacía, ayuda, scroll, disparadores, cancelación y clic selección→cursor | Parser y cargas útiles | Automatización y AX con navegadores reales; silenciar requiere menú accesible |
+| T-04 | Sin coincidencia aproximada destructiva; confirmación de acción/destino, ocho segundos tras TTS, PID/ventana y cancelación | Rechazo, destino, caducidad, fin/interrupción TTS y cancelación del despachador | Cambio físico de ventana/app y ejecución AX |
+| T-02 | Silencio 0,5 s o final; audio incremental sin reiniciar por orden; caché AX 1,5 s, plazos/cancelación; precalentado con FSEvents | Correcciones de transcripción, incluida duración cero; typecheck de los servicios | Medición de frase a acción antes/después con audio real |
+| Nombre | Reglas y reservadas del catálogo, NFC conservando ñ/ll/rr, restauración, contextualStrings | Validación, guardado, rechazo sin sobrescribir y restauración | Portados en la Ola 2 (sección superior) |
+
+Validación final: 23 tests lógicos ejecutados mediante `swiftc`/XCTest sin host SwiftUI, cero fallos. Incluyen los nueve `CatalogParityTests` y catorce regresiones seleccionadas del proyecto. No representan toda la suite Xcode. Los servicios sin UI pasan `swiftc -typecheck` para macOS 14.
+
+El build heredado pasó antes de recompilar SwiftUI. La compilación final queda bloqueada por `sandbox-exec: sandbox_apply: Operation not permitted` al expandir `SwiftUIMacros.StateMacro`; el intento inicial de tests también quedó bloqueado por `com.apple.testmanagerd.control` (error 159). La UI final y toda la suite requieren ejecutar fuera del sandbox los comandos del estado 1C. No se ha validado hardware, rendimiento real ni Lite; no se hicieron commits.
+
+Los siete archivos Swift compartidos carecen de ejecución de cámara, cinética, TalkBack o IA. Los JSON conservan el contrato común íntegro, incluido vocabulario de cursor; contienen datos y no habilitan funciones. El port Lite debe mantener su rechazo de esas acciones. Lista exacta y evidencias: [estado 1C](../.orchestra/estado/1C-base.md).
+
 ## Extensiones analizadas
 
 Fuentes: `extensión` y `extensiónLite` del workspace. Se verificaron el grafo de llamadas, la cobertura del índice y los métodos relevantes de voz, visión, seguimiento, lectura, filtros, controlador y service worker. La exploración del grafo es una ayuda de navegación; no prueba por sí sola paridad funcional.
@@ -24,7 +69,7 @@ La aplicación Swift funciona de forma independiente. No modifica las extensione
 | Clic por permanencia y clic derecho siguiente | Armado tras >=180 ms fuera del anillo; clic al volver y mantener el mismo objetivo durante el tiempo elegido | Un clic por entrada. Calibración, pérdida, pausas y saltos de tiempo desarman. El objetivo usa identidad AX; no es un nodo DOM. |
 | Menú contextual del sitio / menú propio | Clic derecho nativo del sistema | El menú lo proporciona la aplicación activa; no se copia el menú HTML de la extensión. |
 | Cursor limitado a página | Eventos de ratón sobre monitores físicos, incluidos orígenes negativos | El ratón físico pausa 2 s y exige postura nuevamente estable. |
-| TalkBack con debounce 300 ms y contorno | `TalkBackManager`, eventos de ratón y elementos AX, síntesis de Apple | Depende del texto accesible. Durante la salida se ignoran órdenes ordinarias y se aceptan interrupciones explícitas con palabra de activación. No se cancela Speech en cada respuesta. |
+| TalkBack con debounce 300 ms y contorno | `TalkBackManager.swift`: puntero y foco del teclado (`AXObserver`), elementos AX, síntesis de Apple; no lee el valor de campos de texto salvo «lee el elemento/la pantalla» | Depende del texto accesible. Durante la salida se ignoran órdenes ordinarias y se aceptan interrupciones explícitas con palabra de activación. No se cancela Speech en cada respuesta. |
 | Siete matrices SVG de color | Las mismas matrices mediante Core Image y una capa ScreenCaptureKit por pantalla | Captura local hasta 30 FPS, sin audio; se omiten frames sin cambios. Adapta PE se excluye. Contenido protegido y algunas ventanas de nivel superior pueden no filtrarse. Las matrices simulan colores, no constituyen corrección médica. |
 | Continuidad al cambiar pestaña | Servicios con vida ligada a la app, barra de menú y panel flotante | Cerrar ajustes no termina la app. Dormir libera sensores/captura; despertar restaura módulos que estaban activos. |
 | Backend opcional biónico simulado | Lectura AX local por defecto; API compatible con chat/completions opcional | La IA se invoca explícitamente. Captura para IA requiere permiso adicional durante esa sesión. No hay IA generativa local. |
@@ -45,7 +90,7 @@ La aplicación Swift funciona de forma independiente. No modifica las extensione
 
 ## Recursos y privacidad
 
-Un capturador por sensor. Cámara VGA, inferencia serial, descarte de frames atrasados, solicitudes Vision restringidas a la fuente activa y publicaciones de HUD hasta 10 Hz. Consulta del objetivo AX hasta 10 Hz cerca del centro; TalkBack mantiene una consulta en vuelo. Cámara apagada, voz apagada y filtros apagados no dejan procesos de captura activos.
+Un capturador por sensor. Cámara VGA; Vision en su propia cola con una imagen en vuelo y carga adaptativa (>90 ms baja detalle y descansa, <40 ms sube); descarte de frames atrasados; consultas AX del cursor fuera de la cola de Vision; solicitudes Vision restringidas a la fuente activa y publicaciones de HUD hasta 10 Hz. Consulta del objetivo AX hasta 10 Hz cerca del centro; TalkBack mantiene una consulta en vuelo. Cámara apagada, voz apagada y filtros apagados no dejan procesos de captura activos.
 
 Los filtros necesitan captura de pantallas para reproducir matrices arbitrarias sin APIs privadas. No tienen el mismo coste que un filtro CSS del navegador. Se procesan con Core Image y cola de dos buffers; no se afirma un consumo medido sin perfilado con esos módulos activos.
 

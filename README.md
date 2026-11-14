@@ -12,6 +12,8 @@ Requiere **macOS Sonoma 14.0 o posterior**. El proyecto está destinado a **Inte
 
 Si sólo necesitas voz, filtros, mascotas y lectura manual, consulta [Adapta PE Lite para macOS](https://github.com/TheAlejo160/Adapta-PE-Lite-MacOS), que tiene su propio proyecto y no incorpora cámara ni TalkBack automático.
 
+La actualización de voz del 21 de octubre consume el catálogo JSON común en español, inglés, portugués, alemán, francés e italiano. Ajustes permite elegir idioma, guardar un nombre de activación válido y restaurar «Computadora». Speech local depende de los recursos de dictado instalados para el idioma elegido. Los menús destructivos requieren confirmar acción y destino en ocho segundos tras la pregunta hablada; «cancelar» descarta lo pendiente. Desde la Ola 2 también hay pronunciaciones y alias del nombre, «Probar nombre», «Responder también a Computadora», un modo conversación opcional y la corrección prudente de una palabra mal oída. Véanse [las comprobaciones y límites de paridad](docs/PARIDAD.md#voz--21-de-octubre-de-2026) y [el estado de la Ola 1C](.orchestra/estado/1C-base.md).
+
 ## Instalar en tu Mac
 
 ### Desde un DMG
@@ -213,8 +215,10 @@ El cursor sigue **cámara → Vision o correlación de textura → GestureState 
 | [VoiceManager.swift](Adapta-PE/VoiceManager.swift) y [VoiceInputState.swift](Adapta-PE/VoiceInputState.swift) | Audio, Speech, recuperación, activación personal y coordinación con síntesis de voz. |
 | [CommandParser.swift](Adapta-PE/CommandParser.swift) y [ActionManager.swift](Adapta-PE/ActionManager.swift) | Intenciones, sitios, atajos, ejecución, elecciones y respuestas habladas. |
 | [ApplicationCatalog.swift](Adapta-PE/ApplicationCatalog.swift) | Catálogo y alias de apps instaladas. |
-| [DesktopAccess.swift](Adapta-PE/DesktopAccess.swift) | AX, campos, menús, foco, dictado Unicode, selección y TalkBack. Las búsquedas tienen límites de nodos y tiempo. |
-| [TrackingManager.swift](Adapta-PE/TrackingManager.swift), [GestureState.swift](Adapta-PE/GestureState.swift), [KineticState.swift](Adapta-PE/KineticState.swift) y [ZoneTracker.swift](Adapta-PE/ZoneTracker.swift) | Captura, detección por modo, postura, suavizado por tiempo, textura y permanencia. |
+| [DesktopAccess.swift](Adapta-PE/DesktopAccess.swift) | AX, campos, menús, foco, dictado Unicode y selección. Las búsquedas tienen límites de nodos y tiempo. |
+| [TalkBackManager.swift](Adapta-PE/TalkBackManager.swift) | TalkBack: puntero y foco del teclado (`AXObserver`), debounce real de 300 ms, contorno; no lee lo escrito en campos de texto salvo petición. |
+| [KineticDefaults.swift](Adapta-PE/KineticDefaults.swift) | Valores por defecto comunes con Windows Base (velocidad, EMA, dwell 0,5–1,5 s, atracción, pinza, boca, puño, mano falsa, carga adaptativa). Sin validar con cámaras reales. |
+| [TrackingManager.swift](Adapta-PE/TrackingManager.swift), [GestureState.swift](Adapta-PE/GestureState.swift), [KineticState.swift](Adapta-PE/KineticState.swift) y [ZoneTracker.swift](Adapta-PE/ZoneTracker.swift) | Captura, Vision en cola propia con carga adaptativa, pinza, boca (`innerLips`), puño-reposo, mano falsa, joystick con histéresis y señal, postura, suavizado por tiempo, textura 13.0 y permanencia. |
 | [ColorFilterManager.swift](Adapta-PE/ColorFilterManager.swift) | Matrices y composición local por pantalla. |
 | [Mascot.swift](Adapta-PE/Mascot.swift) y [recursos de mascotas](Adapta-PE/Mascotas/) | Atlas elegido, animación, ventanas y controles. |
 | [OptionalAI.swift](Adapta-PE/OptionalAI.swift) | Llavero, endpoint, peticiones explícitas, captura consentida y cancelación. |

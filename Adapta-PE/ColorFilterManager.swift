@@ -2,6 +2,7 @@ import AppKit
 import ScreenCaptureKit
 import CoreImage
 import Combine
+import SwiftUI
 
 // Matrices de las extensiones. Son simulaciones de color, no un tratamiento médico.
 enum ColorFilter: String, CaseIterable, Identifiable {
@@ -9,14 +10,30 @@ enum ColorFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .ninguno: return "Sin filtro"
-        case .protanomalia: return "Protanomalía"
-        case .protanopia: return "Protanopía"
-        case .deuteranomalia: return "Deuteranomalía"
-        case .deuteranopia: return "Deuteranopía"
-        case .tritanomalia: return "Tritanomalía"
-        case .tritanopia: return "Tritanopía"
-        case .acromatopsia: return "Acromatopsia"
+        case .ninguno: return Textos.t("popup.sinFiltro")
+        case .protanomalia: return Textos.t("popup.protanomalia")
+        case .protanopia: return Textos.t("popup.protanopia")
+        case .deuteranomalia: return Textos.t("popup.deuteranomalia")
+        case .deuteranopia: return Textos.t("popup.deuteranopia")
+        case .tritanomalia: return Textos.t("popup.tritanomalia")
+        case .tritanopia: return Textos.t("popup.tritanopia")
+        case .acromatopsia: return Textos.t("popup.acromatopsia")
+        }
+    }
+    var groupTitle: String {
+        switch self {
+        case .ninguno: return Textos.t("filtro.visionNormal")
+        case .protanomalia, .protanopia, .deuteranomalia, .deuteranopia: return Textos.t("filtro.grupoRojoVerde")
+        case .tritanomalia, .tritanopia: return Textos.t("filtro.grupoAzulAmarillo")
+        case .acromatopsia: return Textos.t("filtro.grupoGrises")
+        }
+    }
+    var swatchType: String {
+        switch self {
+        case .ninguno: return "todos"
+        case .protanomalia, .protanopia, .deuteranomalia, .deuteranopia: return "rojo-verde"
+        case .tritanomalia, .tritanopia: return "azul-amarillo"
+        case .acromatopsia: return "grises"
         }
     }
     var matrix: [CGFloat] {
@@ -29,6 +46,70 @@ enum ColorFilter: String, CaseIterable, Identifiable {
         case .tritanomalia: return [0.967,0.033,0, 0,0.733,0.267, 0,0.183,0.817]
         case .tritanopia: return [0.95,0.05,0, 0,0.433,0.567, 0,0.475,0.525]
         case .acromatopsia: return [0.299,0.587,0.114, 0.299,0.587,0.114, 0.299,0.587,0.114]
+        }
+    }
+}
+
+struct ColorFilterSwatchView: View {
+    let filter: ColorFilter
+    var body: some View {
+        Circle()
+            .fill(swatchGradient)
+            .frame(width: 24, height: 24)
+            .overlay(Circle().stroke(Color.primary.opacity(0.2), lineWidth: 1))
+    }
+    private var swatchGradient: AnyShapeStyle {
+        switch filter.swatchType {
+        case "todos":
+            return AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .blue, .purple, .red], center: .center))
+        case "rojo-verde":
+            return AnyShapeStyle(LinearGradient(colors: [Color.red, Color.green], startPoint: .topLeading, endPoint: .bottomTrailing))
+        case "azul-amarillo":
+            return AnyShapeStyle(LinearGradient(colors: [Color.blue, Color.yellow], startPoint: .topLeading, endPoint: .bottomTrailing))
+        case "grises":
+            return AnyShapeStyle(LinearGradient(colors: [Color.white, Color.gray, Color.black], startPoint: .topLeading, endPoint: .bottomTrailing))
+        default:
+            return AnyShapeStyle(Color.gray)
+        }
+    }
+}
+
+struct ColorFilterSelectionView: View {
+    let selected: ColorFilter
+    let onSelect: (ColorFilter) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(ColorFilter.allCases) { filter in
+                Button {
+                    onSelect(filter)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: selected == filter ? "largecircle.fill.circle" : "circle")
+                            .foregroundStyle(selected == filter ? Color.accentColor : Color.secondary)
+                            .imageScale(.medium)
+                        ColorFilterSwatchView(filter: filter)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(filter.title)
+                                .font(.system(size: 15, weight: selected == filter ? .semibold : .regular))
+                                .foregroundStyle(Color.primary)
+                            if filter != .ninguno {
+                                Text(filter.groupTitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 44)
+                    .background(selected == filter ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(filter.title), grupo \(filter.groupTitle)")
+                .accessibilityAddTraits(selected == filter ? [.isSelected] : [])
+            }
         }
     }
 }
