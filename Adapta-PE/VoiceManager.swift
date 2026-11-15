@@ -235,7 +235,7 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
                         self.silence?.cancel()
                         let work = DispatchWorkItem { [weak self] in guard let self, self.taskGeneration == token else { return }; self.consume() }
                         self.silence = work
-                        DispatchQueue.main.asyncAfter(deadline: .now() + (Self.isWakeOnly(text) ? 0.35 : 0.5), execute: work)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + (self.isWakeOnly(text) ? 0.35 : 0.5), execute: work)
                     }
                 }
                 if let error { self.logger.error("Reconocimiento finalizado: \(error.localizedDescription, privacy: .public)") }
@@ -259,10 +259,10 @@ final class VoiceManager: NSObject, ObservableObject, AVCaptureAudioDataOutputSa
         }
         safety = work; DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: work)
     }
-    private static func isWakeOnly(_ text: String) -> Bool {
+    func isWakeOnly(_ text: String) -> Bool {
         let word = WakeName.saved
         var wake = WakePhraseState()
-        return wake.consume(text, wakeWord: word, time: 0).beep
+        return wake.consume(text, wakeWord: word, time: 0, aliases: activationAliases, alsoComputer: alsoComputer).beep
     }
     private var waiting: Bool { ProcessInfo.processInfo.systemUptime < input.waitingUntil }
     private func consume() {

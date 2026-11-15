@@ -109,7 +109,9 @@ final class DesktopAccess {
         guard requirePermission() else { return }
         let appPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let token = self.token
+        let done = ActionManager.shared.deferResult()
         queue.async {
+            defer { DispatchQueue.main.async { done() } }
             guard !self.isCancelled(token) else { return }; self.executionToken = token
             let interval = self.signposter.beginInterval("AXCommand")
             defer { self.signposter.endInterval("AXCommand", interval) }
@@ -354,7 +356,9 @@ final class DesktopAccess {
     func clickSelectionOrCursor(right: Bool = false) {
         guard requirePermission(), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         let token = self.token
+        let done = ActionManager.shared.deferResult()
         queue.async {
+            defer { DispatchQueue.main.async { done() } }
             guard self.canAct(pid: pid, token: token) else { return }; self.executionToken = token
             guard let selected = self.selected else { Self.click(right: right); return }
             guard self.selectedPID == pid, self.canAct(pid: pid, token: token, ventana: self.selectedWindow) else { self.respond("La selección cambió. Selecciona de nuevo o cancela."); return }
@@ -398,16 +402,16 @@ final class DesktopAccess {
         var position = CGPoint(x: display.minX + visible.minX - frame.minX + 20, y: display.minY + frame.maxY - visible.maxY + 20)
         let token = self.token
         queue.async {
-            guard !self.isCancelled(token) else { return }; self.executionToken = token
+            guard !self.isCancelled(token) else { DispatchQueue.main.async { completion(false, false) }; return }; self.executionToken = token
             let target = AXUIElementCreateApplication(app.processIdentifier); AXUIElementSetMessagingTimeout(target, 0.15)
-            guard let window = Self.element(Self.value(target, kAXFocusedWindowAttribute)) ?? (Self.value(target, kAXWindowsAttribute) as? [AXUIElement])?.first else { DispatchQueue.main.async { if !self.isCancelled(token) { completion(false, true) } }; return }
-            guard !self.isCancelled(token) else { return }
+            guard let window = Self.element(Self.value(target, kAXFocusedWindowAttribute)) ?? (Self.value(target, kAXWindowsAttribute) as? [AXUIElement])?.first else { DispatchQueue.main.async { completion(false, !self.isCancelled(token)) }; return }
+            guard !self.isCancelled(token) else { DispatchQueue.main.async { completion(false, false) }; return }
             if let existing = Self.frame(window) {
                 var size = CGSize(width: min(existing.width, max(100, visible.width - 40)), height: min(existing.height, max(100, visible.height - 40)))
                 if existing.size != size, let value = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) }
             }
             let success = AXValueCreate(.cgPoint, &position).map { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, $0) == .success } ?? false
-            DispatchQueue.main.async { if !self.isCancelled(token) { completion(success, !success) } }
+            DispatchQueue.main.async { completion(!self.isCancelled(token) && success, !self.isCancelled(token) && !success) }
         }
     }
 }

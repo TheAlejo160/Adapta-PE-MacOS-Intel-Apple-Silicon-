@@ -80,7 +80,7 @@ struct KineticState {
         else { smooth.x += (0.5 + rawX - smooth.x) * alpha; smooth.y += (0.5 + rawY - smooth.y) * alpha }
         let dx = smooth.x - 0.5, dy = smooth.y - 0.5
         let distance = hypot(dx, dy)
-        let radius = deadRadius + (safe ? 0.008 : 0)
+        let radius = deadRadius + (safe ? KineticDefaults.histeresisZonaSegura : 0)
         safe = distance <= radius && rawDistance <= radius + 0.025
         if safe {
             armSince = nil

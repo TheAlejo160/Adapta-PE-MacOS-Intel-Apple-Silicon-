@@ -647,6 +647,73 @@ final class Adapta_PETests: XCTestCase {
         XCTAssertNil(followed)
         OptionalAIStubProtocol.reply = nil
     }
+
+    @MainActor func testIsWakeOnlyUsesAliasesAndAlsoComputer() {
+        let defaults = UserDefaults.standard
+        let oldWake = defaults.object(forKey: "WakeWord")
+        let oldAliases = defaults.object(forKey: "AliasActivacion")
+        let oldAlso = defaults.object(forKey: "TambienComputadora")
+        defer {
+            defaults.set(oldWake, forKey: "WakeWord")
+            defaults.set(oldAliases, forKey: "AliasActivacion")
+            defaults.set(oldAlso, forKey: "TambienComputadora")
+        }
+        let voice = VoiceManager()
+        XCTAssertNil(voice.saveWakeName("Jarvis"))
+        XCTAssertNil(voice.saveAliases(["Lumi"]))
+        voice.alsoComputer = false
+        XCTAssertTrue(voice.isWakeOnly("Lumi"))
+        XCTAssertFalse(voice.isWakeOnly("Computadora"))
+        voice.alsoComputer = true
+        XCTAssertTrue(voice.isWakeOnly("Computadora"))
+    }
+
+    @MainActor func testExecuteReportsSingleResultAfterDeferredFailure() {
+        let actions = ActionManager.shared
+        let oldResult = actions.onResult
+        defer { actions.cancelPendingActions(); actions.callar(); actions.onResult = oldResult }
+        var callbacks = 0
+        var finalResult: VoiceExecutionResult?
+        let done = expectation(description: "execute async failure")
+        actions.execute("abre aplicacion_inexistente_xyz_123") { result in
+            callbacks += 1
+            finalResult = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertEqual(callbacks, 1)
+        XCTAssertEqual(finalResult, .failure)
+    }
+
+    @MainActor func testCorrectedCommandWaitsForCorrectionSpeechBeforeExecuting() {
+        let actions = ActionManager.shared
+        let defaults = UserDefaults.standard
+        let oldLanguage = defaults.object(forKey: "VoiceLanguage")
+        let oldSpeech = actions.speechOutput
+        let oldResult = actions.onResult
+        defer {
+            actions.cancelPendingActions()
+            actions.callar()
+            actions.speechOutput = oldSpeech
+            actions.onResult = oldResult
+            defaults.set(oldLanguage, forKey: "VoiceLanguage")
+            Textos.shared.actualizarIdioma()
+        }
+        defaults.set("es", forKey: "VoiceLanguage")
+        Textos.shared.actualizarIdioma()
+        var correctionFinishedCleanly = false
+        actions.speechOutput = { active, failed in
+            if !active && !failed { correctionFinishedCleanly = true }
+        }
+        let done = expectation(description: "corrected speech chained")
+        var executedAfterSpeech = false
+        actions.execute("recargs") { _ in
+            executedAfterSpeech = correctionFinishedCleanly
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+        XCTAssertTrue(executedAfterSpeech)
+    }
 }
 
 /// Proveedor simulado para OptionalAI: responde sin red; `nil` deja la petición en vuelo.

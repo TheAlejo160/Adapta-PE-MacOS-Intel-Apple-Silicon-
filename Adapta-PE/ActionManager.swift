@@ -27,7 +27,11 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     var speechOutput: ((_ active: Bool, _ failed: Bool) -> Void)?
     private var resultHandler: ((VoiceExecutionResult) -> Void)?
     var onResult: ((VoiceExecutionResult) -> Void)?
-    private var resultReported = false
+    private var result: VoiceExecutionResult = .ok
+    private var pendingResults = 0
+    private var resultTurn = 0
+    private var processing = false
+    private var speechContinuation: ((Bool) -> Void)?
     var appAction: ((String) -> Void)?
     /// true mientras la ventana del tutorial es la principal: sus ejercicios se practican sobre ella misma.
     var targetsSelf: (() -> Bool)?
@@ -63,16 +67,34 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         let handler = choiceHandler; cancelChoices(); callar(); handler?(index)
     }
 
-    // Resultado del turno de voz para el modo conversación. Un fallo asíncrono posterior lo corrige.
     func execute(_ text: String, completion: @escaping (VoiceExecutionResult) -> Void) {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.execute(text, completion: completion) }; return }
-        resultHandler = completion; resultReported = false
+        let previous = resultHandler; resultHandler = nil; previous?(.failure)
+        resultTurn += 1; pendingResults = 0; result = .ok; resultHandler = completion; processing = true
         procesarIntencion(text)
-        if !resultReported { report(.ok) }
+        processing = false; finishResult()
     }
-    func report(_ result: VoiceExecutionResult) {
-        guard Thread.isMainThread else { DispatchQueue.main.async { self.report(result) }; return }
-        resultReported = true; resultHandler?(result); onResult?(result)
+    func report(_ value: VoiceExecutionResult) {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.report(value) }; return }
+        guard resultHandler != nil else { onResult?(value); return }
+        if result == .ok { result = value }
+        finishResult()
+    }
+    // Mantiene el turno abierto hasta que terminen también las operaciones anidadas.
+    func deferResult() -> () -> Void {
+        guard resultHandler != nil else { return {} }
+        pendingResults += 1
+        let turn = resultTurn
+        var finished = false
+        return {
+            guard !finished, self.resultTurn == turn else { return }
+            finished = true; self.pendingResults -= 1; self.finishResult()
+        }
+    }
+    private func finishResult() {
+        guard !processing, pendingResults == 0, let completion = resultHandler else { return }
+        let value = result
+        resultHandler = nil; onResult?(value); completion(value)
     }
     func fallar(_ text: String) { report(.failure); hablar(text) }
     private func cancelConfirmation() {
@@ -117,6 +139,7 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     func hablar(_ text: String) {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.hablar(text) }; return }
         if confirmationUtterance != nil { cancelConfirmation() }
+        let continuation = speechContinuation; speechContinuation = nil; continuation?(true)
         lastResponse = text
         speechWatchdog?.cancel()
         currentUtterance = nil
@@ -140,6 +163,7 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         DispatchQueue.main.async { if self.currentUtterance === utterance { self.watchSpeech(utterance) } }
     }
     func callar() {
+        let continuation = speechContinuation; speechContinuation = nil; continuation?(true)
         if confirmationUtterance != nil { cancelConfirmation() }
         speechWatchdog?.cancel(); speechWatchdog = nil; currentUtterance = nil
         synthesizer.stopSpeaking(at: .immediate); speechOutput?(false, true)
@@ -151,7 +175,9 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             guard self.currentUtterance === utterance else { return }
             if self.confirmationUtterance === utterance { self.confirmationSpeechFinished(interrupted: interrupted) }
             self.speechWatchdog?.cancel(); self.speechWatchdog = nil; self.currentUtterance = nil
+            let continuation = self.speechContinuation; self.speechContinuation = nil
             self.speechOutput?(false, interrupted)
+            continuation?(interrupted)
         }
     }
     func procesarIntencion(_ raw: String, corrected: Bool = false) {
@@ -234,7 +260,14 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             switch corrected ? nil : VoiceTolerance.correct(raw) {
             case .repeatCommand: report(.unknown); hablar(VoiceCatalog.text("voz.repite"))
             case .text(let fixed) where !CommandParser.parse(fixed).isUnknown:
-                hablar(VoiceCatalog.text("voz.corregido", ["orden": fixed])); procesarIntencion(fixed, corrected: true)
+                let token = actionGeneration
+                let done = deferResult()
+                hablar(VoiceCatalog.text("voz.corregido", ["orden": fixed]))
+                speechContinuation = { [weak self] interrupted in
+                    defer { done() }
+                    guard let self, !interrupted, self.actionGeneration == token else { return }
+                    self.procesarIntencion(fixed, corrected: true)
+                }
             default: withTarget { DesktopAccess.shared.run(.menu(name)) }
             }
         }
@@ -244,7 +277,9 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         guard let app = lastExternalApp, !app.isTerminated, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { fallar("Activa primero la aplicación que quieres controlar"); return }
         app.activate(options: [])
         let token = actionGeneration
+        let done = deferResult()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            defer { done() }
             guard self.actionGeneration == token else { return }
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { self.fallar("No pude activar \(app.localizedName ?? "la aplicación"). Ábrela y repite la orden."); return }
             action()
@@ -272,7 +307,9 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
     private func runScript(_ script: String, reportFailure: Bool = true, completion: ((String?) -> Void)? = nil) {
         let token = actionGeneration
+        let done = deferResult()
         scriptQueue.async {
+            defer { DispatchQueue.main.async { done() } }
             let process = Process(), pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript"); process.arguments = ["-e", script]
             process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
@@ -322,7 +359,9 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     }
     private func openApp(_ name: String, monitor: Int?, fallbackURL: URL? = nil, destination: String = "actual", afterOpen: String? = nil) {
         let token = actionGeneration
+        let done = deferResult()
         ApplicationCatalog.shared.resolve(name) { url in
+            defer { done() }
             guard self.actionGeneration == token else { return }
             guard let url else {
                 if let fallbackURL { self.openURL(fallbackURL, destination: destination) }
@@ -331,8 +370,10 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
                 } else { self.fallar("No encontré una aplicación única llamada \(name). Di su nombre completo.") }
                 return
             }
+            let opened = self.deferResult()
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { app, error in
                 DispatchQueue.main.async {
+                    defer { opened() }
                     guard self.actionGeneration == token else { return }
                     guard let app, error == nil else { self.fallar("No se pudo abrir \(name)"); return }
                     if let action = afterOpen ?? (destination == "ventana" ? "nueva_ventana" : destination == "pestana" ? "nueva_pestana" : nil) {
@@ -351,20 +392,26 @@ final class ActionManager: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             shortcut(name); return
         }
         guard attempt < 6 else { fallar("Activa \(app.localizedName ?? "la aplicación") para ejecutar la acción"); return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.appShortcut(name, app: app, token: token, attempt: attempt + 1) }
+        let done = deferResult()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { defer { done() }; self.appShortcut(name, app: app, token: token, attempt: attempt + 1) }
     }
     private func placeWindow(_ app: NSRunningApplication, monitor: Int, token: Int, attempt: Int) {
         guard actionGeneration == token, DesktopAccess.shared.requirePermission() else { return }
+        let done = deferResult()
         DesktopAccess.shared.moveWindow(app: app, monitor: monitor) { success, retry in
+            defer { done() }
             guard self.actionGeneration == token else { return }
             if retry, attempt < 5 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.placeWindow(app, monitor: monitor, token: token, attempt: attempt + 1) }
+                let retryDone = self.deferResult()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { defer { retryDone() }; self.placeWindow(app, monitor: monitor, token: token, attempt: attempt + 1) }
             } else { success ? self.hablar("Ventana en el monitor \(monitor + 1)") : self.fallar("No se pudo mover la ventana al monitor \(monitor + 1)") }
         }
     }
     private func closeApp(_ name: String) {
         let token = actionGeneration
+        let done = deferResult()
         ApplicationCatalog.shared.resolve(name, exactOnly: true) { url in
+            defer { done() }
             guard self.actionGeneration == token else { return }
             let normalized = CommandParser.normalize(name)
             guard let app = NSWorkspace.shared.runningApplications.first(where: { ($0.bundleURL == url && url != nil) || CommandParser.normalize($0.localizedName ?? "") == normalized }), app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { self.fallar("No encontré esa aplicación abierta"); return }

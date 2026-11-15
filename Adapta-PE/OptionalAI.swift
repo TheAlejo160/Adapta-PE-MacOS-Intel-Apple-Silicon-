@@ -104,7 +104,9 @@ final class OptionalAI: ObservableObject {
         catch { status = "No se pudo preparar la petición"; return }
         isBusy = true; status = "Consultando tu proveedor…"
         let session = self.session
+        let done = ActionManager.shared.deferResult()
         task = Task { @MainActor [weak self] in
+            defer { done() }
             let outcome = await Self.fetch(request, session: session)
             guard let self, self.generation == token else { return }
             self.isBusy = false; self.task = nil
@@ -150,13 +152,15 @@ final class OptionalAI: ObservableObject {
               generation == tokenAntesDelConsentimiento, isEnabled, allowScreenUpload, !isBusy else { return }
         guard CGPreflightScreenCaptureAccess() else { CGRequestScreenCaptureAccess(); status = "Falta permiso de Grabación de pantalla"; return }
         generation += 1; let token = generation; isBusy = true; status = "Capturando pantalla para tu proveedor…"
+        let done = ActionManager.shared.deferResult()
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-            guard let content, let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { DispatchQueue.main.async { if self.generation == token { self.isBusy = false; self.status = "No se pudo capturar la pantalla" } }; return }
+            guard let content, let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else { DispatchQueue.main.async { defer { done() }; if self.generation == token { self.isBusy = false; self.status = "No se pudo capturar la pantalla" } }; return }
             let excluded = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
             let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
             let config = SCStreamConfiguration(); config.width = 1280; config.height = Int(Double(display.height) / Double(display.width) * 1280); config.showsCursor = false
             SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
                 DispatchQueue.main.async {
+                    defer { done() }
                     guard self.generation == token, self.isEnabled, self.allowScreenUpload else { return }
                     self.isBusy = false
                     guard let image, let data = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.65]) else { self.status = "Captura fallida"; return }
